@@ -563,6 +563,58 @@ static int update_modem_bits(enum ast_fax_modems *bits, const char *value)
 	}
 	return 0;
 }
+static char *ast_fax_caps_to_str(enum ast_fax_capabilities caps, char *buf, size_t bufsize)
+{
+	char *out = buf;
+	size_t size = bufsize;
+	int first = 1;
+
+	if (caps & AST_FAX_TECH_SEND) {
+		if (!first) {
+			ast_build_string(&buf, &size, ",");
+		}
+		ast_build_string(&buf, &size, "SEND");
+		first = 0;
+	}
+	if (caps & AST_FAX_TECH_RECEIVE) {
+		if (!first) {
+			ast_build_string(&buf, &size, ",");
+		}
+		ast_build_string(&buf, &size, "RECEIVE");
+		first = 0;
+	}
+	if (caps & AST_FAX_TECH_AUDIO) {
+		if (!first) {
+			ast_build_string(&buf, &size, ",");
+		}
+		ast_build_string(&buf, &size, "AUDIO");
+		first = 0;
+	}
+	if (caps & AST_FAX_TECH_T38) {
+		if (!first) {
+			ast_build_string(&buf, &size, ",");
+		}
+		ast_build_string(&buf, &size, "T38");
+		first = 0;
+	}
+	if (caps & AST_FAX_TECH_MULTI_DOC) {
+		if (!first) {
+			ast_build_string(&buf, &size, ",");
+		}
+		ast_build_string(&buf, &size, "MULTI_DOC");
+		first = 0;
+	}
+	if (caps & AST_FAX_TECH_GATEWAY) {
+		if (!first) {
+			ast_build_string(&buf, &size, ",");
+		}
+		ast_build_string(&buf, &size, "GATEWAY");
+		first = 0;
+	}
+
+
+	return out;
+}
 
 static int ast_fax_modem_to_str(enum ast_fax_modems bits, char *tbuf, size_t bufsize)
 {
@@ -836,7 +888,8 @@ static struct ast_fax_session *fax_session_reserve(struct ast_fax_session_detail
 	AST_RWLIST_UNLOCK(&faxmodules);
 
 	if (!faxmod) {
-		ast_log(LOG_ERROR, "Could not locate a FAX technology module with capabilities (0x%X)\n", details->caps);
+		char caps[128] = "";
+		ast_log(LOG_ERROR, "Could not locate a FAX technology module with capabilities (%s)\n", ast_fax_caps_to_str(details->caps, caps, sizeof(caps)));
 		ao2_ref(s, -1);
 		return NULL;
 	}
@@ -952,7 +1005,8 @@ static struct ast_fax_session *fax_session_new(struct ast_fax_session_details *d
 		AST_RWLIST_UNLOCK(&faxmodules);
 
 		if (!faxmod) {
-			ast_log(LOG_ERROR, "Could not locate a FAX technology module with capabilities (0x%X)\n", details->caps);
+			char caps[128] = "";
+			ast_log(LOG_ERROR, "Could not locate a FAX technology module with capabilities (%s)\n", ast_fax_caps_to_str(details->caps, caps, sizeof(caps)));
 			ao2_ref(s, -1);
 			return NULL;
 		}
@@ -1650,7 +1704,7 @@ static int receivefax_exec(struct ast_channel *chan, const char *data)
 	ast_string_field_set(details, error, "INIT_ERROR");
 	set_channel_variables(chan, details);
 
-	if (details->caps & AST_FAX_TECH_GATEWAY) {
+	if ((details->caps & AST_FAX_TECH_GATEWAY) && (details->gateway_id > 0)) {
 		ast_string_field_set(details, resultstr, "can't receive a fax on a channel with a T.38 gateway");
 		set_channel_variables(chan, details);
 		ast_log(LOG_ERROR, "executing ReceiveFAX on a channel with a T.38 Gateway is not supported\n");
@@ -2120,7 +2174,7 @@ static int sendfax_exec(struct ast_channel *chan, const char *data)
 	ast_string_field_set(details, error, "INIT_ERROR");
 	set_channel_variables(chan, details);
 
-	if (details->caps & AST_FAX_TECH_GATEWAY) {
+	if ((details->caps & AST_FAX_TECH_GATEWAY) && (details->gateway_id > 0)) {
 		ast_string_field_set(details, resultstr, "can't send a fax on a channel with a T.38 gateway");
 		set_channel_variables(chan, details);
 		ast_log(LOG_ERROR, "executing SendFAX on a channel with a T.38 Gateway is not supported\n");
@@ -2224,16 +2278,16 @@ static int sendfax_exec(struct ast_channel *chan, const char *data)
 		file_count++;
 	}
 
-	if (file_count > 1) {
-		details->caps |= AST_FAX_TECH_MULTI_DOC;
-	}
-
 	ast_verb(3, "Channel '%s' sending FAX:\n", chan->name);
 	AST_LIST_TRAVERSE(&details->documents, doc, next) {
 		ast_verb(3, "   %s\n", doc->filename);
 	}
 
 	details->caps = AST_FAX_TECH_SEND;
+
+	if (file_count > 1) {
+		details->caps |= AST_FAX_TECH_MULTI_DOC;
+	}
 
 	/* check for debug */
 	if (ast_test_flag(&opts, OPT_DEBUG) || global_fax_debug) {
@@ -2377,7 +2431,7 @@ static void destroy_gateway(void *data)
 	if (gateway->s) {
 		fax_session_release(gateway->s, gateway->token);
 		gateway->token = NULL;
-		gateway->s->details->caps |= ~AST_FAX_TECH_GATEWAY;
+		gateway->s->details->caps &= ~AST_FAX_TECH_GATEWAY;
 
 		ao2_lock(faxregistry.container);
 		ao2_unlink(faxregistry.container, gateway->s);
@@ -2421,7 +2475,7 @@ static struct fax_gateway *fax_gateway_new(struct ast_fax_session_details *detai
 
 	details->caps = AST_FAX_TECH_GATEWAY;
 	if (details->gateway_timeout && !(gateway->s = fax_session_reserve(details, &gateway->token))) {
-		details->caps |= ~AST_FAX_TECH_GATEWAY;
+		details->caps &= ~AST_FAX_TECH_GATEWAY;
 		ast_log(LOG_ERROR, "Can't reserve a FAX session, gateway attempt failed.\n");
 		ao2_ref(gateway, -1);
 		return NULL;
@@ -3671,7 +3725,7 @@ static int load_module(void)
 	}
 
 	ast_cli_register_multiple(fax_cli, ARRAY_LEN(fax_cli));
-	res = ast_custom_function_register(&acf_faxopt);	
+	res = ast_custom_function_register(&acf_faxopt);
 	fax_logger_level = ast_logger_register_level("FAX");
 
 	return res;

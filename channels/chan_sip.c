@@ -341,7 +341,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</application>
 	<function name="SIP_HEADER" language="en_US">
 		<synopsis>
-			Gets the specified SIP header.
+			Gets the specified SIP header from an incoming INVITE message.
 		</synopsis>
 		<syntax>
 			<parameter name="name" required="true" />
@@ -6824,6 +6824,8 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 			}
 			ast_aoc_destroy_decoded(decoded);
 		}
+		break;
+	case AST_CONTROL_UPDATE_RTP_PEER: /* Absorb this since it is handled by the bridge */
 		break;
 	case -1:
 		res = -1;
@@ -17493,7 +17495,6 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		astman_append(s, "VoiceMailbox: %s\r\n", mailbox_str->str);
 		astman_append(s, "TransferMode: %s\r\n", transfermode2str(peer->allowtransfer));
 		astman_append(s, "Maxforwards: %d\r\n", peer->maxforwards);
-		astman_append(s, "Maxforwards: %d\r\n", peer->maxforwards);
 		astman_append(s, "Call-limit: %d\r\n", peer->call_limit);
 		astman_append(s, "Busy-level: %d\r\n", peer->busy_level);
 		astman_append(s, "MaxCallBR: %d kbps\r\n", peer->maxcallbitrate);
@@ -17554,8 +17555,8 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 				astman_append(s, "ChanVariable: %s=%s\r\n", v->name, v->value);
 			}
 		}
-		astman_append(s, "SIP-Use-Reason-Header : %s\r\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_Q850_REASON)) ? "Y" : "N");
-		astman_append(s, "Description : %s\r\n", peer->description);
+		astman_append(s, "SIP-Use-Reason-Header: %s\r\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_Q850_REASON)) ? "Y" : "N");
+		astman_append(s, "Description: %s\r\n", peer->description);
 
 		peer = sip_unref_peer(peer, "sip_show_peer: sip_unref_peer: done with peer");
 
