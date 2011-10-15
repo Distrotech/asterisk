@@ -35,6 +35,7 @@
  */
 
 /*** MODULEINFO
+	<support_level>core</support_level>
 	<conflict>app_fax</conflict>
 ***/
 
@@ -46,16 +47,12 @@
  * \author Kevin P. Fleming <kpfleming@digium.com>
  * \author Matthew Nicholson <mnicholson@digium.com>
  * \author Gregory H. Nietsky  <gregory@distrotech.co.za>
- * 
+ *
  * A generic FAX resource module that provides SendFAX and ReceiveFAX applications.
  * This module requires FAX technology modules, like res_fax_spandsp, to register with it
  * so it can use the technology modules to perform the actual FAX transmissions.
  * \ingroup applications
  */
-
-/*** MODULEINFO
-	<support_level>core</support_level>
- ***/
 
 #include "asterisk.h"
 
@@ -84,7 +81,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/translate.h"
 
 /*** DOCUMENTATION
-	<application name="ReceiveFax" language="en_US">
+	<application name="ReceiveFAX" language="en_US" module="res_fax">
 		<synopsis>
 			Receive a FAX and save as a TIFF/F file.
 		</synopsis>
@@ -116,7 +113,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="function">FAXOPT</ref>
 		</see-also>
 	</application>
-	<application name="SendFax" language="en_US">
+	<application name="SendFAX" language="en_US" module="res_fax">
 		<synopsis>
 			Sends a specified TIFF/F file as a FAX.
 		</synopsis>
@@ -155,7 +152,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="function">FAXOPT</ref>
 		</see-also>
 	</application>
-	<function name="FAXOPT" language="en_US">
+	<function name="FAXOPT" language="en_US" module="res_fax">
 		<synopsis>
 			Gets/sets various pieces of information about a fax session.
 		</synopsis>
