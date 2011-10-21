@@ -1286,7 +1286,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct ast_sock
 static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *totag, const char *fromtag);
 static void check_pendings(struct sip_pvt *p);
 static void *sip_park_thread(void *stuff);
-static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct sip_request *req, int seqno, char *parkexten);
+static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct sip_request *req, int seqno, const char *park_exten, const char *park_context);
 
 static void *sip_pickup_thread(void *stuff);
 static int sip_pickup(struct ast_channel *chan);
@@ -5311,6 +5311,12 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 		dialog->relatedpeer = sip_ref_peer(peer, "create_addr: setting dialog's relatedpeer pointer");
 		sip_unref_peer(peer, "create_addr: unref peer from sip_find_peer hashtab lookup");
 		return res;
+	} else if (ast_check_digits(peername)) {
+		/* Although an IPv4 hostname *could* be represented as a 32-bit integer, it is uncommon and
+		 * it makes dialing SIP/${EXTEN} for a peer that isn't defined resolve to an IP that is
+		 * almost certainly not intended. It is much better to just reject purely numeric hostnames */
+		ast_log(LOG_WARNING, "Purely numeric hostname (%s), and not a peer--rejecting!\n", peername);
+		return -1;
 	} else {
 		dialog->rtptimeout = global_rtptimeout;
 		dialog->rtpholdtimeout = global_rtpholdtimeout;
@@ -5352,6 +5358,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 
 		if (ast_sockaddr_resolve_first(&dialog->sa, hostn, 0)) {
 			ast_log(LOG_WARNING, "No such host: %s\n", peername);
+			return -1;
 		}
 
 		if (srv_ret > 0) {
@@ -12816,7 +12823,7 @@ static void update_connectedline(struct sip_pvt *p, const void *data, size_t dat
 			ast_set_flag(&p->flags[0], SIP_OUTGOING);
 			p->invitestate = INV_CALLING;
 			send_request(p, &req, XMIT_CRITICAL, p->ocseq);
-		} else if (is_method_allowed(&p->allowed_methods, SIP_UPDATE)) {
+		} else if ((is_method_allowed(&p->allowed_methods, SIP_UPDATE)) && (!ast_strlen_zero(p->okcontacturi))) { 
 			reqprep(&req, p, SIP_UPDATE, 0, 1);
 			add_rpid(&req, p);
 			add_header(&req, "X-Asterisk-rpid-update", "Yes");
@@ -13794,7 +13801,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	char data[SIPBUFSIZE];
 	const char *expires = sip_get_header(req, "Expires");
 	int expire = atoi(expires);
-	char *curi, *domain, *transport;
+	char *curi = NULL, *domain = NULL, *transport = NULL;
 	int transport_type;
 	const char *useragent;
 	struct ast_sockaddr oldsin, testsa;
@@ -13872,7 +13879,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	ast_string_field_build(pvt, our_contact, "<%s>", curi);
 
 	/* Make sure it's a SIP URL */
-	if (parse_uri_legacy_check(curi, "sip:,sips:", &curi, NULL, &domain, &transport)) {
+	if (ast_strlen_zero(curi) || parse_uri_legacy_check(curi, "sip:,sips:", &curi, NULL, &domain, &transport)) {
 		ast_log(LOG_NOTICE, "Not a valid SIP contact (missing sip:/sips:) trying to use anyway\n");
 	}
 
@@ -21389,32 +21396,16 @@ static void *sip_park_thread(void *stuff)
 {
 	struct ast_channel *transferee, *transferer;	/* Chan1: The transferee, Chan2: The transferer */
 	struct sip_dual *d;
-	struct sip_request req = {0,};
 	int ext;
 	int res;
 
 	d = stuff;
 	transferee = d->chan1;
 	transferer = d->chan2;
-	copy_request(&req, &d->req);
 
-	if (!transferee || !transferer) {
-		ast_log(LOG_ERROR, "Missing channels for parking! Transferer %s Transferee %s\n", transferer ? "<available>" : "<missing>", transferee ? "<available>" : "<missing>" );
-		deinit_req(&d->req);
-		ast_free(d);
-		return NULL;
-	}
 	ast_debug(4, "SIP Park: Transferer channel %s, Transferee %s\n", transferer->name, transferee->name);
 
-	if (ast_do_masquerade(transferee)) {
-		ast_log(LOG_WARNING, "Masquerade failed.\n");
-		transmit_response(transferer->tech_pvt, "503 Internal error", &req);
-		deinit_req(&d->req);
-		ast_free(d);
-		return NULL;
-	}
-
-	res = ast_park_call(transferee, transferer, 0, d->parkexten, &ext);
+	res = ast_park_call_exten(transferee, transferer, d->park_exten, d->park_context, 0, &ext);
 
 #ifdef WHEN_WE_KNOW_THAT_THE_CLIENT_SUPPORTS_MESSAGE
 	if (res) {
@@ -21442,31 +21433,40 @@ static void *sip_park_thread(void *stuff)
 		/* Do not hangup call */
 	}
 	deinit_req(&d->req);
+	ast_free(d->park_exten);
+	ast_free(d->park_context);
 	ast_free(d);
 	return NULL;
 }
 
-/*! \brief Park a call using the subsystem in res_features.c
-	This is executed in a separate thread
-*/
-static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct sip_request *req, int seqno, char *parkexten)
+/*! DO NOT hold any locks while calling sip_park */
+static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct sip_request *req, int seqno, const char *park_exten, const char *park_context)
 {
 	struct sip_dual *d;
 	struct ast_channel *transferee, *transferer;
-		/* Chan2m: The transferer, chan1m: The transferee */
 	pthread_t th;
 
 	transferee = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, chan1->accountcode, chan1->exten, chan1->context, chan1->linkedid, chan1->amaflags, "Parking/%s", chan1->name);
 	transferer = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, chan2->accountcode, chan2->exten, chan2->context, chan2->linkedid, chan2->amaflags, "SIPPeer/%s", chan2->name);
-	if ((!transferer) || (!transferee)) {
+	d = ast_calloc(1, sizeof(*d));
+	if (!transferee || !transferer || !d) {
 		if (transferee) {
-			transferee->hangupcause = AST_CAUSE_SWITCH_CONGESTION;
 			ast_hangup(transferee);
 		}
 		if (transferer) {
-			transferer->hangupcause = AST_CAUSE_SWITCH_CONGESTION;
 			ast_hangup(transferer);
 		}
+		ast_free(d);
+		return -1;
+	}
+	d->park_exten = ast_strdup(park_exten);
+	d->park_context = ast_strdup(park_context);
+	if (!d->park_exten || !d->park_context) {
+		ast_hangup(transferee);
+		ast_hangup(transferer);
+		ast_free(d->park_exten);
+		ast_free(d->park_context);
+		ast_free(d);
 		return -1;
 	}
 
@@ -21475,67 +21475,56 @@ static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct
 	transferee->writeformat = chan1->writeformat;
 
 	/* Prepare for taking over the channel */
-	ast_channel_masquerade(transferee, chan1);
+	if (ast_channel_masquerade(transferee, chan1)) {
+		ast_hangup(transferee);
+		ast_hangup(transferer);
+		ast_free(d->park_exten);
+		ast_free(d->park_context);
+		ast_free(d);
+		return -1;
+	}
 
 	/* Setup the extensions and such */
 	ast_copy_string(transferee->context, chan1->context, sizeof(transferee->context));
 	ast_copy_string(transferee->exten, chan1->exten, sizeof(transferee->exten));
 	transferee->priority = chan1->priority;
-		
+
+	ast_do_masquerade(transferee);
+
 	/* We make a clone of the peer channel too, so we can play
 	   back the announcement */
 
 	/* Make formats okay */
 	transferer->readformat = chan2->readformat;
 	transferer->writeformat = chan2->writeformat;
-	if (!ast_strlen_zero(chan2->parkinglot))
-		ast_string_field_set(transferer, parkinglot, chan2->parkinglot);
+	ast_string_field_set(transferer, parkinglot, chan2->parkinglot);
 
-	/* Prepare for taking over the channel.  Go ahead and grab this channel
-	 * lock here to avoid a deadlock with callbacks into the channel driver
-	 * that hold the channel lock and want the pvt lock.  */
-	while (ast_channel_trylock(chan2)) {
-		struct sip_pvt *pvt = chan2->tech_pvt;
-		sip_pvt_unlock(pvt);
-		usleep(1);
-		sip_pvt_lock(pvt);
+	/* Prepare for taking over the channel */
+	if (ast_channel_masquerade(transferer, chan2)) {
+		ast_hangup(transferer);
+		ast_free(d->park_exten);
+		ast_free(d->park_context);
+		ast_free(d);
+		return -1;
 	}
-	ast_channel_masquerade(transferer, chan2);
-	ast_channel_unlock(chan2);
 
 	/* Setup the extensions and such */
 	ast_copy_string(transferer->context, chan2->context, sizeof(transferer->context));
 	ast_copy_string(transferer->exten, chan2->exten, sizeof(transferer->exten));
 	transferer->priority = chan2->priority;
 
-	if (ast_do_masquerade(transferer)) {
-		ast_log(LOG_WARNING, "Masquerade failed :(\n");
-		transferer->hangupcause = AST_CAUSE_SWITCH_CONGESTION;
-		ast_hangup(transferer);
-		return -1;
-	}
-	if (!transferer || !transferee) {
-		if (!transferer) {
-			ast_debug(1, "No transferer channel, giving up parking\n");
-		}
-		if (!transferee) {
-			ast_debug(1, "No transferee channel, giving up parking\n");
-		}
-		return -1;
-	}
-	if (!(d = ast_calloc(1, sizeof(*d)))) {
-		return -1;
-	}
+	ast_do_masquerade(transferer);
 
 	/* Save original request for followup */
 	copy_request(&d->req, req);
 	d->chan1 = transferee;	/* Transferee */
 	d->chan2 = transferer;	/* Transferer */
 	d->seqno = seqno;
-	d->parkexten = parkexten;
 	if (ast_pthread_create_detached_background(&th, NULL, sip_park_thread, d) < 0) {
 		/* Could not start thread */
 		deinit_req(&d->req);
+		ast_free(d->park_exten);
+		ast_free(d->park_context);
 		ast_free(d);	/* We don't need it anymore. If thread is created, d will be free'd
 				   by sip_park_thread() */
 		return -1;
@@ -23562,6 +23551,7 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 	callid = ast_strdupa(p->callid);
 	localtransfer = p->refer->localtransfer;
 	attendedtransfer = p->refer->attendedtransfer;
+
 	if (!*nounlock) {
 		ast_channel_unlock(p->owner);
 		*nounlock = 1;
@@ -23570,9 +23560,6 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 
 	/* Parking a call.  DO NOT hold any locks while calling ast_parking_ext_valid() */
 	if (localtransfer && ast_parking_ext_valid(refer_to, current.chan1, current.chan1->context)) {
-
-		copy_request(&current.req, req);
-
 		sip_pvt_lock(p);
 		ast_clear_flag(&p->flags[0], SIP_GOTREFER);
 		p->refer->status = REFER_200OK;
@@ -23601,7 +23588,7 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 		}
 
 		/* DO NOT hold any locks while calling sip_park */
-		if (sip_park(current.chan2, current.chan1, req, seqno, refer_to)) {
+		if (sip_park(current.chan2, current.chan1, req, seqno, refer_to, current.chan1->context)) {
 			sip_pvt_lock(p);
 			transmit_notify_with_sipfrag(p, seqno, "500 Internal Server Error", TRUE);
 		} else {
@@ -27309,7 +27296,9 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		found++;
 		/* we've unlinked the peer from the peers container but not unlinked from the peers_by_ip container yet
 		  this leads to a wrong refcounter and the peer object is never destroyed */
-		ao2_t_unlink(peers_by_ip, peer, "ao2_unlink peer from peers_by_ip table");
+		if (!ast_sockaddr_isnull(&peer->addr)) {
+			ao2_t_unlink(peers_by_ip, peer, "ao2_unlink peer from peers_by_ip table");
+		}
 		if (!(peer->the_mark))
 			firstpass = 0;
 	} else {
