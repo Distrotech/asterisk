@@ -338,7 +338,6 @@
 #define SIP_PAGE2_FAX_DETECT_T38		(2 << 23)  /*!< DP: Fax Detection support - detect T.38 reinvite from peer */
 #define SIP_PAGE2_FAX_DETECT_BOTH		(3 << 23)  /*!< DP: Fax Detection support - detect both */
 
-#define SIP_PAGE2_REGISTERTRYING		(1 << 24)  /*!< DP: Send 100 Trying on REGISTER attempts */
 #define SIP_PAGE2_UDPTL_DESTINATION		(1 << 25)  /*!< DP: Use source IP of RTP as destination if NAT is enabled */
 #define SIP_PAGE2_VIDEOSUPPORT_ALWAYS		(1 << 26)  /*!< DP: Always set up video, even if endpoints don't support it */
 #define SIP_PAGE2_HAVEPEERCONTEXT	(1 << 27)	/*< Are we associated with a configured peer context? */

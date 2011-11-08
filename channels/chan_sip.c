@@ -1445,7 +1445,7 @@ static void set_socket_transport(struct sip_socket *socket, int transport);
 static void realtime_update_peer(const char *peername, struct ast_sockaddr *addr, const char *username, const char *fullcontact, const char *useragent, int expirey, unsigned short deprecated_username, int lastms);
 static void update_peer(struct sip_peer *p, int expire);
 static struct ast_variable *get_insecure_variable_from_config(struct ast_config *config);
-static const char *get_name_from_variable(struct ast_variable *var, const char *newpeername);
+static const char *get_name_from_variable(const struct ast_variable *var);
 static struct sip_peer *realtime_peer(const char *peername, struct ast_sockaddr *sin, int devstate_only, int which_objects);
 static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 
@@ -1511,6 +1511,7 @@ static int create_addr_from_peer(struct sip_pvt *r, struct sip_peer *peer);
 static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_sockaddr *addr, int newdialog, struct ast_sockaddr *remote_address);
 static char *generate_random_string(char *buf, size_t size);
 static void build_callid_pvt(struct sip_pvt *pvt);
+static void change_callid_pvt(struct sip_pvt *pvt, const char *callid);
 static void build_callid_registry(struct sip_registry *reg, const struct ast_sockaddr *ourip, const char *fromdomain);
 static void make_our_tag(char *tagbuf, size_t len);
 static int add_header(struct sip_request *req, const char *var, const char *value);
@@ -2953,6 +2954,13 @@ static void *dialog_unlink_rtpcheck(struct sip_pvt *dialog)
 	return NULL;
 }
 
+/*!
+ * \brief Unlink a dialog from the dialogs container, as well as any other places
+ * that it may be currently stored.
+ *
+ * \note A reference to the dialog must be held before calling this function, and this
+ * function does not release that reference.
+ */
 void dialog_unlink_all(struct sip_pvt *dialog)
 {
 	struct sip_pkt *cp;
@@ -4587,9 +4595,18 @@ static void sip_destroy_peer_fn(void *peer)
 static void sip_destroy_peer(struct sip_peer *peer)
 {
 	ast_debug(3, "Destroying SIP peer %s\n", peer->name);
-	if (peer->outboundproxy)
+
+	/*
+	 * Remove any mailbox event subscriptions for this peer before
+	 * we destroy anything.  An event subscription callback may be
+	 * happening right now.
+	 */
+	clear_peer_mailboxes(peer);
+
+	if (peer->outboundproxy) {
 		ao2_ref(peer->outboundproxy, -1);
-	peer->outboundproxy = NULL;
+		peer->outboundproxy = NULL;
+	}
 
 	/* Delete it, it needs to disappear */
 	if (peer->call) {
@@ -4623,7 +4640,6 @@ static void sip_destroy_peer(struct sip_peer *peer)
 	}
 	if (peer->dnsmgr)
 		ast_dnsmgr_release(peer->dnsmgr);
-	clear_peer_mailboxes(peer);
 
 	if (peer->socket.tcptls_session) {
 		ao2_ref(peer->socket.tcptls_session, -1);
@@ -4664,14 +4680,232 @@ static struct ast_variable *get_insecure_variable_from_config(struct ast_config 
 	return var;
 }
 
-static const char *get_name_from_variable(struct ast_variable *var, const char *newpeername)
+static struct ast_variable *get_insecure_variable_from_sippeers(const char *column, const char *value)
 {
-	struct ast_variable *tmp;
-	for (tmp = var; tmp; tmp = tmp->next) {
-		if (!newpeername && !strcasecmp(tmp->name, "name"))
-			newpeername = tmp->value;
+	struct ast_config *peerlist;
+	struct ast_variable *var = NULL;
+	if ((peerlist = ast_load_realtime_multientry("sippeers", column, value, "insecure LIKE", "%port%", SENTINEL))) {
+		if ((var = get_insecure_variable_from_config(peerlist))) {
+			/* Must clone, because var will get freed along with
+			 * peerlist. */
+			var = ast_variables_dup(var);
+		}
+		ast_config_destroy(peerlist);
 	}
-	return newpeername;
+	return var;
+}
+
+/* Yes.. the only column that makes sense to pass is "ipaddr", but for
+ * consistency's sake, we require the column name to be passed. As extra
+ * argument, we take a pointer to var. We already got the info, so we better
+ * return it and save the caller a query. If return value is nonzero, then *var
+ * is nonzero too (and the other way around). */
+static struct ast_variable *get_insecure_variable_from_sipregs(const char *column, const char *value, struct ast_variable **var)
+{
+	struct ast_variable *varregs = NULL;
+	struct ast_config *regs, *peers;
+	char *regscat;
+	const char *regname;
+
+	if (!(regs = ast_load_realtime_multientry("sipregs", column, value, SENTINEL))) {
+		return NULL;
+	}
+
+	/* Load *all* peers that are probably insecure=port */
+	if (!(peers = ast_load_realtime_multientry("sippeers", "insecure LIKE", "%port%", SENTINEL))) {
+		ast_config_destroy(regs);
+		return NULL;
+	}
+
+	/* Loop over the sipregs that match IP address and attempt to find an
+	 * insecure=port match to it in sippeers. */
+	regscat = NULL;
+	while ((regscat = ast_category_browse(regs, regscat)) && (regname = ast_variable_retrieve(regs, regscat, "name"))) {
+		char *peerscat;
+		const char *peername;
+
+		peerscat = NULL;
+		while ((peerscat = ast_category_browse(peers, peerscat)) && (peername = ast_variable_retrieve(peers, peerscat, "name"))) {
+			if (!strcasecmp(regname, peername)) {
+				/* Ensure that it really is insecure=port and
+				 * not something else. */
+				const char *insecure = ast_variable_retrieve(peers, peerscat, "insecure");
+				struct ast_flags flags = {0};
+				set_insecure_flags(&flags, insecure, -1);
+				if (ast_test_flag(&flags, SIP_INSECURE_PORT)) {
+					/* ENOMEM checks till the bitter end. */
+					if ((varregs = ast_variables_dup(ast_category_root(regs, regscat)))) {
+						if (!(*var = ast_variables_dup(ast_category_root(peers, peerscat)))) {
+							ast_variables_destroy(varregs);
+							varregs = NULL;
+						}
+					}
+					goto done;
+				}
+			}
+		}
+	}
+
+done:
+	ast_config_destroy(regs);
+	ast_config_destroy(peers);
+	return varregs;
+}
+
+static const char *get_name_from_variable(const struct ast_variable *var)
+{
+	/* Don't expect this to return non-NULL. Both NULL and empty
+	 * values can cause the option to get removed from the variable
+	 * list. This is called on ast_variables gotten from both
+	 * ast_load_realtime and ast_load_realtime_multientry.
+	 * - ast_load_realtime removes options with empty values
+	 * - ast_load_realtime_multientry does not!
+	 * For consistent behaviour, we check for the empty name and
+	 * return NULL instead. */
+	const struct ast_variable *tmp;
+	for (tmp = var; tmp; tmp = tmp->next) {
+		if (!strcasecmp(tmp->name, "name")) {
+			if (!ast_strlen_zero(tmp->value)) {
+				return tmp->value;
+			}
+			break;
+		}
+	}
+	return NULL;
+}
+
+/* If varregs is NULL, we don't use sipregs.
+ * Using empty if-bodies instead of goto's while avoiding unnecessary indents */
+static int realtime_peer_by_name(const char *const *name, struct ast_sockaddr *addr, const char *ipaddr, struct ast_variable **var, struct ast_variable **varregs)
+{
+	/* Peer by name and host=dynamic */
+	if ((*var = ast_load_realtime("sippeers", "name", *name, "host", "dynamic", SENTINEL))) {
+		;
+	/* Peer by name and host=IP */
+	} else if (addr && !(*var = ast_load_realtime("sippeers", "name", *name, "host", ipaddr, SENTINEL))) {
+		;
+	/* Peer by name and host=HOSTNAME */
+	} else if ((*var = ast_load_realtime("sippeers", "name", *name, SENTINEL))) {
+		/*!\note
+		 * If this one loaded something, then we need to ensure that the host
+		 * field matched.  The only reason why we can't have this as a criteria
+		 * is because we only have the IP address and the host field might be
+		 * set as a name (and the reverse PTR might not match).
+		 */
+		if (addr) {
+			struct ast_variable *tmp;
+			for (tmp = *var; tmp; tmp = tmp->next) {
+				if (!strcasecmp(tmp->name, "host")) {
+					struct ast_sockaddr *addrs = NULL;
+
+					if (ast_sockaddr_resolve(&addrs,
+								 tmp->value,
+								 PARSE_PORT_FORBID,
+								 get_address_family_filter(&bindaddr)) <= 0 ||
+								 ast_sockaddr_cmp(&addrs[0], addr)) {
+						/* No match */
+						ast_variables_destroy(*var);
+						*var = NULL;
+					}
+					ast_free(addrs);
+					break;
+				}
+			}
+		}
+	}
+
+	/* Did we find anything? */
+	if (*var) {
+		if (varregs) {
+			*varregs = ast_load_realtime("sipregs", "name", *name, SENTINEL);
+		}
+		return 1;
+	}
+	return 0;
+}
+
+/* Another little helper function for backwards compatibility: this
+ * checks/fetches the sippeer that belongs to the sipreg. If none is
+ * found, we free the sipreg and return false. This way we can do the
+ * check inside the if-condition below. In the old code, not finding
+ * the sippeer also had it continue look for another match, so we do
+ * the same. */
+static struct ast_variable *realtime_peer_get_sippeer_helper(const char **name, struct ast_variable **varregs) {
+	struct ast_variable *var = NULL;
+	const char *old_name = *name;
+	*name = get_name_from_variable(*varregs);
+	if (!*name || !(var = ast_load_realtime("sippeers", "name", *name, SENTINEL))) {
+		if (!*name) {
+			ast_log(LOG_WARNING, "Found sipreg but it has no name\n");
+		}
+		ast_variables_destroy(*varregs);
+		*varregs = NULL;
+		*name = old_name;
+	}
+	return var;
+}
+
+/* If varregs is NULL, we don't use sipregs. If we return true, then *name is
+ * set. Using empty if-bodies instead of goto's while avoiding unnecessary
+ * indents. */
+static int realtime_peer_by_addr(const char **name, struct ast_sockaddr *addr, const char *ipaddr, struct ast_variable **var, struct ast_variable **varregs)
+{
+	char portstring[6]; /* up to 5 digits plus null terminator */
+	ast_copy_string(portstring, ast_sockaddr_stringify_port(addr), sizeof(portstring));
+
+	/* We're not finding this peer by this name anymore. Reset it. */
+	*name = NULL;
+
+	/* First check for fixed IP hosts */
+	if ((*var = ast_load_realtime("sippeers", "host", ipaddr, "port", portstring, SENTINEL))) {
+		;
+	/* Check for registered hosts (in sipregs) */
+	} else if (varregs && (*varregs = ast_load_realtime("sipregs", "ipaddr", ipaddr, "port", portstring, SENTINEL)) &&
+			(*var = realtime_peer_get_sippeer_helper(name, varregs))) {
+		;
+	/* Check for registered hosts (in sippeers) */
+	} else if (!varregs && (*var = ast_load_realtime("sippeers", "ipaddr", ipaddr, "port", portstring, SENTINEL))) {
+		;
+	/* We couldn't match on ipaddress and port, so we need to check if port is insecure */
+	} else if ((*var = get_insecure_variable_from_sippeers("host", ipaddr))) {
+		;
+	/* Same as above, but try the IP address field (in sipregs)
+	 * Observe that it fetches the name/var at the same time, without the
+	 * realtime_peer_get_sippeer_helper. Also note that it is quite inefficient.
+	 * Avoid sipregs if possible. */
+	} else if (varregs && (*varregs = get_insecure_variable_from_sipregs("ipaddr", ipaddr, var))) {
+		;
+	/* Same as above, but try the IP address field (in sippeers) */
+	} else if (!varregs && (*var = get_insecure_variable_from_sippeers("ipaddr", ipaddr))) {
+		;
+	}
+
+	/* Nothing found? */
+	if (!*var) {
+		return 0;
+	}
+
+	/* Check peer name. It must not be empty. There may exist a
+	 * different match that does have a name, but it's too late for
+	 * that now. */
+	if (!*name && !(*name = get_name_from_variable(*var))) {
+		ast_log(LOG_WARNING, "Found peer for IP %s but it has no name\n", ipaddr);
+		ast_variables_destroy(*var);
+		*var = NULL;
+		if (varregs && *varregs) {
+			ast_variables_destroy(*varregs);
+			*varregs = NULL;
+		}
+		return 0;
+	}
+
+	/* Make sure varregs is populated if var is. The inverse,
+	 * ensuring that var is set when varregs is, is taken
+	 * care of by realtime_peer_get_sippeer_helper(). */
+	if (varregs && !*varregs) {
+		*varregs = ast_load_realtime("sipregs", "name", *name, SENTINEL);
+	}
+	return 1;
 }
 
 /*! \brief  realtime_peer: Get peer from realtime storage
@@ -4679,162 +4913,47 @@ static const char *get_name_from_variable(struct ast_variable *var, const char *
  * Checks the "sipregs" realtime family from extconfig.conf if it's configured.
  * This returns a pointer to a peer and because we use build_peer, we can rest
  * assured that the refcount is bumped.
-*/
+ * 
+ * \note This is never called with both newpeername and addr at the same time.
+ * If you do, be prepared to get a peer with a different name than newpeername.
+ */
 static struct sip_peer *realtime_peer(const char *newpeername, struct ast_sockaddr *addr, int devstate_only, int which_objects)
 {
-	struct sip_peer *peer;
+	struct sip_peer *peer = NULL;
 	struct ast_variable *var = NULL;
 	struct ast_variable *varregs = NULL;
-	struct ast_variable *tmp;
-	struct ast_config *peerlist = NULL;
 	char ipaddr[INET6_ADDRSTRLEN];
-	char portstring[6]; /*up to 5 digits plus null terminator*/
 	int realtimeregs = ast_check_realtime("sipregs");
 
-	/* First check on peer name */
-	if (newpeername) {
-		if (realtimeregs)
-			varregs = ast_load_realtime("sipregs", "name", newpeername, SENTINEL);
-
-		var = ast_load_realtime("sippeers", "name", newpeername, "host", "dynamic", SENTINEL);
-		if (!var && addr) {
-			var = ast_load_realtime("sippeers", "name", newpeername, "host", ast_sockaddr_stringify_addr(addr), SENTINEL);
-		}
-		if (!var) {
-			var = ast_load_realtime("sippeers", "name", newpeername, SENTINEL);
-			/*!\note
-			 * If this one loaded something, then we need to ensure that the host
-			 * field matched.  The only reason why we can't have this as a criteria
-			 * is because we only have the IP address and the host field might be
-			 * set as a name (and the reverse PTR might not match).
-			 */
-			if (var && addr) {
-				for (tmp = var; tmp; tmp = tmp->next) {
-					if (!strcasecmp(tmp->name, "host")) {
-						struct ast_sockaddr *addrs = NULL;
-
-						if (ast_sockaddr_resolve(&addrs,
-									 tmp->value,
-									 PARSE_PORT_FORBID,
-									 get_address_family_filter(&bindaddr)) <= 0 ||
-						    ast_sockaddr_cmp(&addrs[0], addr)) {
-							/* No match */
-							ast_variables_destroy(var);
-							var = NULL;
-						}
-						ast_free(addrs);
-						break;
-					}
-				}
-			}
-		}
-	}
-
-	if (!var && addr) {	/* Then check on IP address for dynamic peers */
+	if (addr) {
 		ast_copy_string(ipaddr, ast_sockaddr_stringify_addr(addr), sizeof(ipaddr));
-		ast_copy_string(portstring, ast_sockaddr_stringify_port(addr), sizeof(portstring));
-		var = ast_load_realtime("sippeers", "host", ipaddr, "port", portstring, SENTINEL);	/* First check for fixed IP hosts */
-		if (var) {
-			if (realtimeregs) {
-				newpeername = get_name_from_variable(var, newpeername);
-				varregs = ast_load_realtime("sipregs", "name", newpeername, SENTINEL);
-			}
-		} else {
-			if (realtimeregs)
-				varregs = ast_load_realtime("sipregs", "ipaddr", ipaddr, "port", portstring, SENTINEL); /* Then check for registered hosts */
-			else
-				var = ast_load_realtime("sippeers", "ipaddr", ipaddr, "port", portstring, SENTINEL); /* Then check for registered hosts */
-			if (varregs) {
-				newpeername = get_name_from_variable(varregs, newpeername);
-				var = ast_load_realtime("sippeers", "name", newpeername, SENTINEL);
-			}
-		}
-		if (!var) { /*We couldn't match on ipaddress and port, so we need to check if port is insecure*/
-			peerlist = ast_load_realtime_multientry("sippeers", "host", ipaddr, SENTINEL);
-			if (peerlist) {
-				var = get_insecure_variable_from_config(peerlist);
-				if(var) {
-					if (realtimeregs) {
-						newpeername = get_name_from_variable(var, newpeername);
-						varregs = ast_load_realtime("sipregs", "name", newpeername, SENTINEL);
-					}
-				} else { /*var wasn't found in the list of "hosts", so try "ipaddr"*/
-					peerlist = NULL;
-					peerlist = ast_load_realtime_multientry("sippeers", "ipaddr", ipaddr, SENTINEL);
-					if(peerlist) {
-						var = get_insecure_variable_from_config(peerlist);
-						if(var) {
-							if (realtimeregs) {
-								newpeername = get_name_from_variable(var, newpeername);
-								varregs = ast_load_realtime("sipregs", "name", newpeername, SENTINEL);
-							}
-						}
-					}
-				}
-			} else {
-				if (realtimeregs) {
-					peerlist = ast_load_realtime_multientry("sipregs", "ipaddr", ipaddr, SENTINEL);
-					if (peerlist) {
-						varregs = get_insecure_variable_from_config(peerlist);
-						if (varregs) {
-							newpeername = get_name_from_variable(varregs, newpeername);
-							var = ast_load_realtime("sippeers", "name", newpeername, SENTINEL);
-						}
-					}
-				} else {
-					peerlist = ast_load_realtime_multientry("sippeers", "ipaddr", ipaddr, SENTINEL);
-					if (peerlist) {
-						var = get_insecure_variable_from_config(peerlist);
-						if (var) {
-							newpeername = get_name_from_variable(var, newpeername);
-							varregs = ast_load_realtime("sipregs", "name", newpeername, SENTINEL);
-						}
-					}
-				}
-			}
-		}
+	} else {
+		ipaddr[0] = '\0';
 	}
 
-	if (!var) {
-		if (peerlist)
-			ast_config_destroy(peerlist);
+	if (newpeername && realtime_peer_by_name(&newpeername, addr, ipaddr, &var, realtimeregs ? &varregs : NULL)) {
+		;
+	} else if (addr && realtime_peer_by_addr(&newpeername, addr, ipaddr, &var, realtimeregs ? &varregs : NULL)) {
+		;
+	} else {
 		return NULL;
 	}
 
-	for (tmp = var; tmp; tmp = tmp->next) {
-		if (!strcasecmp(tmp->name, "type") && (!strcasecmp(tmp->value, "peer") && which_objects == FINDUSERS)) {
-			if (peerlist) {
-				ast_config_destroy(peerlist);
-			} else {
-				ast_variables_destroy(var);
-				ast_variables_destroy(varregs);
+	/* If we're looking for users, don't return peers (although this check
+	 * should probably be done in realtime_peer_by_* instead...) */
+	if (which_objects == FINDUSERS) {
+		struct ast_variable *tmp;
+		for (tmp = var; tmp; tmp = tmp->next) {
+			if (!strcasecmp(tmp->name, "type") && (!strcasecmp(tmp->value, "peer"))) {
+				goto cleanup;
 			}
-			return NULL;
-		} else if (!newpeername && !strcasecmp(tmp->name, "name")) {
-			newpeername = tmp->value;
 		}
 	}
-
-	if (!newpeername) {	/* Did not find peer in realtime */
-		ast_log(LOG_WARNING, "Cannot Determine peer name ip=%s\n", ipaddr);
-		if(peerlist)
-			ast_config_destroy(peerlist);
-		else
-			ast_variables_destroy(var);
-		return NULL;
-	}
-
 
 	/* Peer found in realtime, now build it in memory */
 	peer = build_peer(newpeername, var, varregs, TRUE, devstate_only);
 	if (!peer) {
-		if(peerlist)
-			ast_config_destroy(peerlist);
-		else {
-			ast_variables_destroy(var);
-			ast_variables_destroy(varregs);
-		}
-		return NULL;
+		goto cleanup;
 	}
 
 	ast_debug(3, "-REALTIME- loading peer from database to memory. Name: %s. Peer objects: %d\n", peer->name, rpeerobjs);
@@ -4854,13 +4973,10 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct ast_sockad
 		}
 	}
 	peer->is_realtime = 1;
-	if (peerlist)
-		ast_config_destroy(peerlist);
-	else {
-		ast_variables_destroy(var);
-		ast_variables_destroy(varregs);
-	}
 
+cleanup:
+	ast_variables_destroy(var);
+	ast_variables_destroy(varregs);
 	return peer;
 }
 
@@ -5222,15 +5338,20 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	if (!ast_strlen_zero(peer->fromdomain)) {
 		ast_string_field_set(dialog, fromdomain, peer->fromdomain);
 		if (!dialog->initreq.headers) {
-			char *c;
+			char *new_callid;
 			char *tmpcall = ast_strdupa(dialog->callid);
 			/* this sure looks to me like we are going to change the callid on this dialog!! */
-			c = strchr(tmpcall, '@');
-			if (c) {
-				*c = '\0';
-				ao2_t_unlink(dialogs, dialog, "About to change the callid -- remove the old name");
-				ast_string_field_build(dialog, callid, "%s@%s", tmpcall, peer->fromdomain);
-				ao2_t_link(dialogs, dialog, "New dialog callid -- inserted back into table");
+			new_callid = strchr(tmpcall, '@');
+			if (new_callid) {
+				int callid_size;
+
+				*new_callid = '\0';
+
+				/* Change the dialog callid. */
+				callid_size = strlen(tmpcall) + strlen(peer->fromdomain) + 2;
+				new_callid = alloca(callid_size);
+				snprintf(new_callid, callid_size, "%s@%s", tmpcall, peer->fromdomain);
+				change_callid_pvt(dialog, new_callid);
 			}
 		}
 	}
@@ -7390,15 +7511,68 @@ static char *generate_uri(struct sip_pvt *pvt, char *buf, size_t size)
 	return buf;
 }
 
-/*! \brief Build SIP Call-ID value for a non-REGISTER transaction */
+/*!
+ * \brief Build SIP Call-ID value for a non-REGISTER transaction
+ *
+ * \note The passed in pvt must not be in a dialogs container
+ * since this function changes the hash key used by the
+ * container.
+ */
 static void build_callid_pvt(struct sip_pvt *pvt)
 {
 	char buf[33];
-
 	const char *host = S_OR(pvt->fromdomain, ast_sockaddr_stringify_remote(&pvt->ourip));
-	
-	ast_string_field_build(pvt, callid, "%s@%s", generate_random_string(buf, sizeof(buf)), host);
 
+	ast_string_field_build(pvt, callid, "%s@%s", generate_random_string(buf, sizeof(buf)), host);
+}
+
+/*! \brief Unlink the given object from the container and return TRUE if it was in the container. */
+#define CONTAINER_UNLINK(container, obj, tag)								\
+	({																		\
+		int found = 0;														\
+		typeof((obj)) __removed_obj;										\
+		__removed_obj = ao2_t_callback((container),							\
+			OBJ_UNLINK | OBJ_POINTER, ao2_match_by_addr, (obj), (tag));		\
+		if (__removed_obj) {												\
+			ao2_ref(__removed_obj, -1);										\
+			found = 1;														\
+		}																	\
+		found;																\
+	})
+
+/*!
+ * \internal
+ * \brief Safely change the callid of the given SIP dialog.
+ *
+ * \param pvt SIP private structure to change callid
+ * \param callid Specified new callid to use.  NULL if generate new callid.
+ *
+ * \return Nothing
+ */
+static void change_callid_pvt(struct sip_pvt *pvt, const char *callid)
+{
+	int in_dialog_container;
+	int in_rtp_container;
+
+	ao2_lock(dialogs);
+	ao2_lock(dialogs_rtpcheck);
+	in_dialog_container = CONTAINER_UNLINK(dialogs, pvt,
+		"About to change the callid -- remove the old name");
+	in_rtp_container = CONTAINER_UNLINK(dialogs_rtpcheck, pvt,
+		"About to change the callid -- remove the old name");
+	if (callid) {
+		ast_string_field_set(pvt, callid, callid);
+	} else {
+		build_callid_pvt(pvt);
+	}
+	if (in_dialog_container) {
+		ao2_t_link(dialogs, pvt, "New dialog callid -- inserted back into table");
+	}
+	if (in_rtp_container) {
+		ao2_t_link(dialogs_rtpcheck, pvt, "New dialog callid -- inserted back into table");
+	}
+	ao2_unlock(dialogs_rtpcheck);
+	ao2_unlock(dialogs);
 }
 
 /*! \brief Build SIP Call-ID value for a REGISTER transaction */
@@ -12318,7 +12492,10 @@ static int __sip_subscribe_mwi_do(struct sip_subscription_mwi *mwi)
 	ast_sip_ouraddrfor(&mwi->call->sa, &mwi->call->ourip, mwi->call);
 	build_contact(mwi->call);
 	build_via(mwi->call);
-	build_callid_pvt(mwi->call);
+
+	/* Change the dialog callid. */
+	change_callid_pvt(mwi->call, NULL);
+
 	ast_set_flag(&mwi->call->flags[0], SIP_OUTGOING);
 	
 	/* Associate the call with us */
@@ -14634,8 +14811,6 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct ast_sock
 			res = AUTH_PEER_NOT_DYNAMIC;
 		} else {
 			ast_copy_flags(&p->flags[0], &peer->flags[0], SIP_NAT_FORCE_RPORT);
-			if (ast_test_flag(&p->flags[1], SIP_PAGE2_REGISTERTRYING))
-				transmit_response(p, "100 Trying", req);
 			if (!(res = check_auth(p, req, peer->name, peer->secret, peer->md5secret, SIP_REGISTER, uri2, XMIT_UNRELIABLE, req->ignore))) {
 				if (sip_cancel_destroy(p))
 					ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
@@ -14720,17 +14895,11 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct ast_sock
 			ao2_unlock(peer);
 		}
 	}
-	if (!peer && sip_cfg.alwaysauthreject) {
-		/* If we found a peer, we transmit a 100 Trying.  Therefore, if we're
-		 * trying to avoid leaking information, we MUST also transmit the same
-		 * response when we DON'T find a peer. */
-		transmit_response(p, "100 Trying", req);
-		/* Insert a fake delay between the 100 and the subsequent failure. */
-		sched_yield();
-	}
 	if (!res) {
 		if (sendmwi) {
+			ao2_unlock(p);
 			sip_send_mwi_to_peer(peer, 0);
+			ao2_lock(p);
 		}
 		ast_devstate_changed(AST_DEVICE_UNKNOWN, "SIP/%s", peer->name);
 	}
@@ -16935,14 +17104,12 @@ static int dialog_checkrtp_cb(void *dialogobj, void *arg, int flags)
  * \brief Match dialogs that need to be destroyed
  *
  * \details This is used with ao2_callback to unlink/delete all dialogs that
- * are marked needdestroy. It will return CMP_MATCH for candidates, and they
- * will be unlinked.
+ * are marked needdestroy.
  *
  * \todo Re-work this to improve efficiency.  Currently, this function is called
  * on _every_ dialog after processing _every_ incoming SIP/UDP packet, or
  * potentially even more often when the scheduler has entries to run.
  */
-
 static int dialog_needdestroy(void *dialogobj, void *arg, int flags)
 {
 	struct sip_pvt *dialog = dialogobj;
@@ -17463,7 +17630,6 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, ")\n");
 
 		ast_cli(fd, "  Auto-Framing :  %s \n", AST_CLI_YESNO(peer->autoframing));
-		ast_cli(fd, "  100 on REG   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_REGISTERTRYING)));
 		ast_cli(fd, "  Status       : ");
 		peer_status(peer, status, sizeof(status));
 		ast_cli(fd, "%s\n", status);
@@ -18010,8 +18176,8 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  SDP Owner Name:         %s\n", ast_strlen_zero(global_sdpowner) ? "-" : global_sdpowner);
 	ast_cli(a->fd, "  Reg. context:           %s\n", S_OR(sip_cfg.regcontext, "(not set)"));
 	ast_cli(a->fd, "  Regexten on Qualify:    %s\n", AST_CLI_YESNO(sip_cfg.regextenonqualify));
-	ast_cli(a->fd, "  Trust RPID:             %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_TRUSTRPID)));
-	ast_cli(a->fd, "  Send RPID:              %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_SENDRPID)));
+	ast_cli(a->fd, "  Trust RPID:             %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_TRUSTRPID)));
+	ast_cli(a->fd, "  Send RPID:              %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_SENDRPID)));
 	ast_cli(a->fd, "  Legacy userfield parse: %s\n", AST_CLI_YESNO(sip_cfg.legacy_useroption_parsing));
 	ast_cli(a->fd, "  Caller ID:              %s\n", default_callerid);
 	if ((default_fromdomainport) && (default_fromdomainport != STANDARD_SIP_PORT)) {
@@ -24872,7 +25038,9 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 
 		p->subscribed = MWI_NOTIFICATION;
 		if (ast_test_flag(&authpeer->flags[1], SIP_PAGE2_SUBSCRIBEMWIONLY)) {
+			ao2_unlock(p);
 			add_peer_mwi_subs(authpeer);
+			ao2_lock(p);
 		}
 		if (authpeer->mwipvt && authpeer->mwipvt != p) {	/* Destroy old PVT if this is a new one */
 			/* We only allow one subscription per peer */
@@ -24948,7 +25116,12 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 			ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 			transmit_response(p, "200 OK", req);
 			if (p->relatedpeer) {	/* Send first notification */
-				sip_send_mwi_to_peer(p->relatedpeer, 0);
+				struct sip_peer *peer = p->relatedpeer;
+				sip_ref_peer(peer, "ensure a peer ref is held during MWI sending");
+				ao2_unlock(p);
+				sip_send_mwi_to_peer(peer, 0);
+				ao2_lock(p);
+				sip_unref_peer(peer, "release a peer ref now that MWI is sent");
 			}
 		} else if (p->subscribed != CALL_COMPLETION) {
 
@@ -25684,6 +25857,7 @@ static int get_cached_mwi(struct sip_peer *peer, int *new, int *old)
 }
 
 /*! \brief Send message waiting indication to alert peer that they've got voicemail
+ *  \note Both peer and associated sip_pvt must be unlocked prior to calling this function
  *  \returns -1 on failure, 0 on success
  */
 static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
@@ -25691,13 +25865,20 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 	/* Called with peerl lock, but releases it */
 	struct sip_pvt *p;
 	int newmsgs = 0, oldmsgs = 0;
+	const char *vmexten;
+
+	ao2_lock(peer);
+
+	vmexten = ast_strdupa(peer->vmexten);
 
 	if (ast_test_flag((&peer->flags[1]), SIP_PAGE2_SUBSCRIBEMWIONLY) && !peer->mwipvt) {
+		ao2_unlock(peer);
 		return -1;
 	}
 
 	/* Do we have an IP address? If not, skip this peer */
 	if (ast_sockaddr_isnull(&peer->addr) && ast_sockaddr_isnull(&peer->defaddr)) {
+		ao2_unlock(peer);
 		return -1;
 	}
 
@@ -25710,17 +25891,19 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 		if (ast_strlen_zero(mailbox_str->str)) {
 			return -1;
 		}
+		ao2_unlock(peer);
 		ast_app_inboxcount(mailbox_str->str, &newmsgs, &oldmsgs);
+		ao2_lock(peer);
 	}
-	ao2_lock(peer);
 
 	if (peer->mwipvt) {
 		/* Base message on subscription */
-		p = dialog_ref(peer->mwipvt, "sip_send_mwi_to_peer: Setting dialog ptr p from peer->mwipvt-- should this be done?");
+		p = dialog_ref(peer->mwipvt, "sip_send_mwi_to_peer: Setting dialog ptr p from peer->mwipvt");
+		ao2_unlock(peer);
 	} else {
+		ao2_unlock(peer);
 		/* Build temporary dialog for this message */
 		if (!(p = sip_alloc(NULL, NULL, 0, SIP_NOTIFY, NULL))) {
-			ao2_unlock(peer);
 			return -1;
 		}
 
@@ -25734,20 +25917,23 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 			dialog_unlink_all(p);
 			dialog_unref(p, "unref dialog p just created via sip_alloc");
 			/* sip_destroy(p); */
-			ao2_unlock(peer);
 			return -1;
 		}
 		/* Recalculate our side, and recalculate Call ID */
 		ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
 		build_via(p);
-		ao2_t_unlink(dialogs, p, "About to change the callid -- remove the old name");
-		build_callid_pvt(p);
+
+		ao2_lock(peer);
 		if (!ast_strlen_zero(peer->mwi_from)) {
 			ast_string_field_set(p, mwi_from, peer->mwi_from);
 		} else if (!ast_strlen_zero(default_mwi_from)) {
 			ast_string_field_set(p, mwi_from, default_mwi_from);
 		}
-		ao2_t_link(dialogs, p, "Linking in under new name");
+		ao2_unlock(peer);
+
+		/* Change the dialog callid. */
+		change_callid_pvt(p, NULL);
+
 		/* Destroy this session after 32 secs */
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	}
@@ -25759,10 +25945,10 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 	/* Send MWI */
 	ast_set_flag(&p->flags[0], SIP_OUTGOING);
 	/* the following will decrement the refcount on p as it finishes */
-	transmit_notify_with_mwi(p, newmsgs, oldmsgs, peer->vmexten);
+	transmit_notify_with_mwi(p, newmsgs, oldmsgs, vmexten);
 	sip_pvt_unlock(p);
 	dialog_unref(p, "unref dialog ptr p just before it goes out of scope at the end of sip_send_mwi_to_peer.");
-	ao2_unlock(peer);
+
 	return 0;
 }
 
@@ -26339,7 +26525,7 @@ static int sip_poke_peer(struct sip_peer *peer, int force)
 		return -1;
 	}
 	peer->call = dialog_ref(p, "copy sip alloc from p to peer->call");
-	
+
 	p->sa = peer->addr;
 	p->recv = peer->addr;
 	copy_socket_data(&p->socket, &peer->socket);
@@ -26348,20 +26534,26 @@ static int sip_poke_peer(struct sip_peer *peer, int force)
 	ast_copy_flags(&p->flags[2], &peer->flags[2], SIP_PAGE3_FLAGS_TO_COPY);
 
 	/* Send OPTIONs to peer's fullcontact */
-	if (!ast_strlen_zero(peer->fullcontact))
+	if (!ast_strlen_zero(peer->fullcontact)) {
 		ast_string_field_set(p, fullcontact, peer->fullcontact);
+	}
 
-	if (!ast_strlen_zero(peer->tohost))
+	if (!ast_strlen_zero(peer->fromuser)) {
+		ast_string_field_set(p, fromuser, peer->fromuser);
+	}
+
+	if (!ast_strlen_zero(peer->tohost)) {
 		ast_string_field_set(p, tohost, peer->tohost);
-	else
+	} else {
 		ast_string_field_set(p, tohost, ast_sockaddr_stringify_host_remote(&peer->addr));
+	}
 
 	/* Recalculate our side, and recalculate Call ID */
 	ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
 	build_via(p);
-	ao2_t_unlink(dialogs, p, "About to change the callid -- remove the old name");
-	build_callid_pvt(p);
-	ao2_t_link(dialogs, p, "Linking in under new name");
+
+	/* Change the dialog callid. */
+	change_callid_pvt(p, NULL);
 
 	AST_SCHED_DEL_UNREF(sched, peer->pokeexpire,
 			sip_unref_peer(peer, "removing poke peer ref"));
@@ -26658,9 +26850,9 @@ static struct ast_channel *sip_request_call(const char *type, struct ast_format_
 	/* Recalculate our side, and recalculate Call ID */
 	ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
 	build_via(p);
-	ao2_t_unlink(dialogs, p, "About to change the callid -- remove the old name");
-	build_callid_pvt(p);
-	ao2_t_link(dialogs, p, "Linking in under new name");
+
+	/* Change the dialog callid. */
+	change_callid_pvt(p, NULL);
 
 	/* We have an extension to call, don't use the full contact here */
 	/* This to enable dialing registered peers with extension dialling,
@@ -27335,8 +27527,9 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		set_peer_defaults(peer);	/* Set peer defaults */
 		peer->type = 0;
 	}
-	if (!found && name)
-		ast_copy_string(peer->name, name, sizeof(peer->name));
+
+	/* in case the case of the peer name has changed, update the name */
+	ast_copy_string(peer->name, name, sizeof(peer->name));
 
 	/* If we have channel variables, remove them (reload) */
 	if (peer->chanvars) {
@@ -27618,8 +27811,6 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				}
 			} else if (!strcasecmp(v->name, "preferred_codec_only")) {
 				ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_PREFERRED_CODEC);
-			} else if (!strcasecmp(v->name, "registertrying")) {
-				ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_REGISTERTRYING);
 			} else if (!strcasecmp(v->name, "autoframing")) {
 				peer->autoframing = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "rtptimeout")) {
@@ -30325,7 +30516,7 @@ static int load_module(void)
 	peers = ao2_t_container_alloc(HASH_PEER_SIZE, peer_hash_cb, peer_cmp_cb, "allocate peers");
 	peers_by_ip = ao2_t_container_alloc(HASH_PEER_SIZE, peer_iphash_cb, peer_ipcmp_cb, "allocate peers_by_ip");
 	dialogs = ao2_t_container_alloc(HASH_DIALOG_SIZE, dialog_hash_cb, dialog_cmp_cb, "allocate dialogs");
-	dialogs_needdestroy = ao2_t_container_alloc(HASH_DIALOG_SIZE, dialog_hash_cb, dialog_cmp_cb, "allocate dialogs_needdestroy");
+	dialogs_needdestroy = ao2_t_container_alloc(1, NULL, NULL, "allocate dialogs_needdestroy");
 	dialogs_rtpcheck = ao2_t_container_alloc(HASH_DIALOG_SIZE, dialog_hash_cb, dialog_cmp_cb, "allocate dialogs for rtpchecks");
 	threadt = ao2_t_container_alloc(HASH_DIALOG_SIZE, threadt_hash_cb, threadt_cmp_cb, "allocate threadt table");
 	if (!peers || !peers_by_ip || !dialogs || !dialogs_needdestroy || !dialogs_rtpcheck
@@ -30599,8 +30790,8 @@ static int unload_module(void)
 	ao2_t_ref(peers, -1, "unref the peers table");
 	ao2_t_ref(peers_by_ip, -1, "unref the peers_by_ip table");
 	ao2_t_ref(dialogs, -1, "unref the dialogs table");
-	ao2_t_ref(dialogs_needdestroy, -1, "unref the dialogs table");
-	ao2_t_ref(dialogs_rtpcheck, -1, "unref the dialogs table");
+	ao2_t_ref(dialogs_needdestroy, -1, "unref dialogs_needdestroy");
+	ao2_t_ref(dialogs_rtpcheck, -1, "unref dialogs_rtpcheck");
 	ao2_t_ref(threadt, -1, "unref the thread table");
 	ao2_t_ref(sip_monitor_instances, -1, "unref the sip_monitor_instances table");
 
