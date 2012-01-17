@@ -4014,8 +4014,12 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 			cnf->useropts = ast_strdup(useropts);
 			cnf->adminopts = ast_strdup(adminopts);
 			cnf->bookid = ast_strdup(bookid);
-			cnf->recordingfilename = ast_strdup(recordingfilename);
-			cnf->recordingformat = ast_strdup(recordingformat);
+			if (!ast_strlen_zero(recordingfilename)) {
+				cnf->recordingfilename = ast_strdup(recordingfilename);
+			}
+			if (!ast_strlen_zero(recordingformat)) {
+				cnf->recordingformat = ast_strdup(recordingformat);
+			}
 
 			/* Parse the other options into confflags -- need to do this in two
 			 * steps, because the parse_options routine zeroes the buffer. */
@@ -4429,13 +4433,27 @@ static int conf_exec(struct ast_channel *chan, const char *data)
 					res = -1;
 				}
 			} else {
-				/* Check to see if the conference requires a pin
-				 * and we ALWAYS prompt or no pin was provided */
-				if ((!ast_strlen_zero(cnf->pin) ||
+				/* Conference requires a pin for specified access level */
+				int req_pin = !ast_strlen_zero(cnf->pin) ||
 					(!ast_strlen_zero(cnf->pinadmin) &&
-						ast_test_flag64(&confflags, CONFFLAG_ADMIN))) &&
-				    (ast_test_flag64(&confflags, CONFFLAG_ALWAYSPROMPT) ||
-						ast_strlen_zero(args.pin))) {
+						ast_test_flag64(&confflags, CONFFLAG_ADMIN));
+				/* The following logic was derived from a
+				 * 4 variable truth table and defines which
+				 * circumstances are not exempt from pin
+				 * checking.
+				 * If this needs to be modified, write the
+				 * truth table back out from the boolean
+				 * expression AB+A'D+C', change the erroneous
+				 * result, and rederive the expression.
+				 * Variables:
+				 *  A: pin provided?
+				 *  B: always prompt?
+				 *  C: dynamic?
+				 *  D: has users? */
+				int not_exempt = !cnf->isdynamic;
+				not_exempt = not_exempt || (!ast_strlen_zero(args.pin) && ast_test_flag64(&confflags, CONFFLAG_ALWAYSPROMPT));
+				not_exempt = not_exempt || (ast_strlen_zero(args.pin) && cnf->users);
+				if (req_pin && not_exempt) {
 					char pin[MAX_PIN] = "";
 					int j;
 

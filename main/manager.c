@@ -220,6 +220,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</syntax>
 		<description>
 			<para>Set a global or local channel variable.</para>
+			<note>
+				<para>If a channel name is not provided then the variable is global.</para>
+			</note>
 		</description>
 	</manager>
 	<manager name="Getvar" language="en_US">
@@ -237,6 +240,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</syntax>
 		<description>
 			<para>Get the value of a global or local channel variable.</para>
+			<note>
+				<para>If a channel name is not provided then the variable is global.</para>
+			</note>
 		</description>
 	</manager>
 	<manager name="GetConfig" language="en_US">
@@ -5745,9 +5751,10 @@ static void xml_translate(struct ast_str **out, char *in, struct ast_variable *g
 		}
 
 		if (in_data) {
-			/* Process data field in Opaque mode */
-			xml_copy_escape(out, val, 0);   /* data field */
+			/* Process data field in Opaque mode. This is a
+			 * followup, so we re-add line feeds. */
 			ast_str_append(out, 0, xml ? "\n" : "<br>\n");
+			xml_copy_escape(out, val, 0);   /* data field */
 			continue;
 		}
 
@@ -5783,7 +5790,9 @@ static void xml_translate(struct ast_str **out, char *in, struct ast_variable *g
 		ao2_ref(vc, -1);
 		ast_str_append(out, 0, xml ? "='" : "</td><td>");
 		xml_copy_escape(out, val, 0);	/* data field */
-		ast_str_append(out, 0, xml ? "'" : "</td></tr>\n");
+		if (!in_data || !*in) {
+			ast_str_append(out, 0, xml ? "'" : "</td></tr>\n");
+		}
 	}
 
 	if (inobj) {

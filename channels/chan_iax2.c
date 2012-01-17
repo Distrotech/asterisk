@@ -5839,8 +5839,10 @@ static struct ast_channel *ast_iax2_new(int callno, int state, iax2_format capab
 		tmp->caller.ani.number.str = ast_strdup(i->cid_num);
 	}
 	tmp->dialed.number.str = ast_strdup(i->dnid);
-	tmp->redirecting.from.number.valid = 1;
-	tmp->redirecting.from.number.str = ast_strdup(i->rdnis);
+	if (!ast_strlen_zero(i->rdnis)) {
+		tmp->redirecting.from.number.valid = 1;
+		tmp->redirecting.from.number.str = ast_strdup(i->rdnis);
+	}
 	tmp->caller.id.name.presentation = i->calling_pres;
 	tmp->caller.id.number.presentation = i->calling_pres;
 	tmp->caller.id.number.plan = i->calling_ton;
@@ -12378,7 +12380,8 @@ static int peer_set_srcaddr(struct iax2_peer *peer, const char *srcaddr)
 		if (port < 1)
 			port = IAX_DEFAULT_PORTNO;
 	}
-	
+
+	sin_tmp.ss.ss_family = AF_INET;
 	if (!ast_get_ip(&sin_tmp, addr)) {
 		struct ast_netsock *sock;
 		int res;
@@ -12597,6 +12600,7 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 			} else if (!strcasecmp(v->name, "defaultip")) {
 				struct ast_sockaddr peer_defaddr_tmp;
 
+				peer_defaddr_tmp.ss.ss_family = AF_INET;
 				if (ast_get_ip(&peer_defaddr_tmp, v->value)) {
 					return peer_unref(peer);
 				}
