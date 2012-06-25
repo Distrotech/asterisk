@@ -11,7 +11,7 @@ all:
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 portinfo: portinfo.o
-	$(CC) -o $@ $^ -lisdnnet -lmISDN -lpthread
+	$(CC) -o $@ $^ -lisdnnet-1 -lmISDN -lpthread
 
 clean:
 	rm -rf *.a *.o *.so portinfo *.i
