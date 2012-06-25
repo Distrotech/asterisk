@@ -6011,17 +6011,23 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 
 		if (p->rtp && !p->srtp && setup_srtp(&p->srtp) < 0) {
 			ast_log(LOG_WARNING, "SRTP audio setup failed\n");
-			return -1;
+			if (!ast_test_flag(&p->flags[2], SIP_PAGE3_SRTP_TRY)) {
+				return -1;
+			}
 		}
 
 		if (p->vrtp && !p->vsrtp && setup_srtp(&p->vsrtp) < 0) {
 			ast_log(LOG_WARNING, "SRTP video setup failed\n");
-			return -1;
+			if (!ast_test_flag(&p->flags[2], SIP_PAGE3_SRTP_TRY)) {
+				return -1;
+			}
 		}
 
 		if (p->trtp && !p->tsrtp && setup_srtp(&p->tsrtp) < 0) {
 			ast_log(LOG_WARNING, "SRTP text setup failed\n");
-			return -1;
+			if (!ast_test_flag(&p->flags[2], SIP_PAGE3_SRTP_TRY)) {
+				return -1;
+			}
 		}
 	}
 
@@ -9831,32 +9837,48 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 
 	if (secure_audio && !(p->srtp && (ast_test_flag(p->srtp, SRTP_CRYPTO_OFFER_OK)))) {
 		ast_log(LOG_WARNING, "Can't provide secure audio requested in SDP offer\n");
-		res = -1;
-		goto process_sdp_cleanup;
+		if (!ast_test_flag(&p->flags[2], SIP_PAGE3_SRTP_TRY)) {
+			res = -1;
+			goto process_sdp_cleanup;
+		}
 	}
 
 	if (!secure_audio && p->srtp) {
 		ast_log(LOG_WARNING, "We are requesting SRTP for audio, but they responded without it!\n");
-		res = -1;
-		goto process_sdp_cleanup;
+		if (ast_test_flag(&p->flags[2], SIP_PAGE3_SRTP_TRY)) {
+			sip_srtp_destroy(p->srtp);
+			p->srtp = NULL;
+		} else {
+			res = -1;
+			goto process_sdp_cleanup;
+		}
 	}
 
 	if (secure_video && !(p->vsrtp && (ast_test_flag(p->vsrtp, SRTP_CRYPTO_OFFER_OK)))) {
 		ast_log(LOG_WARNING, "Can't provide secure video requested in SDP offer\n");
-		res = -1;
-		goto process_sdp_cleanup;
+		if (!ast_test_flag(&p->flags[2], SIP_PAGE3_SRTP_TRY)) {
+			res = -1;
+			goto process_sdp_cleanup;
+		}
 	}
 
 	if (!p->novideo && !secure_video && p->vsrtp) {
 		ast_log(LOG_WARNING, "We are requesting SRTP for video, but they responded without it!\n");
-		res = -1;
-		goto process_sdp_cleanup;
+		if (ast_test_flag(&p->flags[2], SIP_PAGE3_SRTP_TRY)) {
+			sip_srtp_destroy(p->vsrtp);
+			p->vsrtp = NULL;
+		} else {
+			res = -1;
+			goto process_sdp_cleanup;
+		}
 	}
 
 	if (!(secure_audio || secure_video) && ast_test_flag(&p->flags[1], SIP_PAGE2_USE_SRTP)) {
 		ast_log(LOG_WARNING, "Matched device setup to use SRTP, but request was not!\n");
-		res = -1;
-		goto process_sdp_cleanup;
+		if (!ast_test_flag(&p->flags[2], SIP_PAGE3_SRTP_TRY)) {
+			res = -1;
+			goto process_sdp_cleanup;
+		}
 	}
 
 	if (udptlportno == -1) {
@@ -24334,7 +24356,8 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				transmit_response_with_t38_sdp(p, "200 OK", req, (reinvite ? XMIT_RELIABLE : (req->ignore ?  XMIT_UNRELIABLE : XMIT_CRITICAL)));
 			} else if ((p->t38.state == T38_DISABLED) || (p->t38.state == T38_REJECTED)) {
 				/* If this is not a re-invite or something to ignore - it's critical */
-				if (p->srtp && !ast_test_flag(p->srtp, SRTP_CRYPTO_OFFER_OK)) {
+				if (p->srtp && !ast_test_flag(p->srtp, SRTP_CRYPTO_OFFER_OK) &&
+				    !ast_test_flag(&p->flags[2], SIP_PAGE3_SRTP_TRY)) {
 					ast_log(LOG_WARNING, "Target does not support required crypto\n");
 					transmit_response_reliable(p, "488 Not Acceptable Here (crypto)", req);
 				} else {
@@ -28729,6 +28752,11 @@ static void add_peer_mailboxes(struct sip_peer *peer, const char *value)
 		int duplicate = 0;
 		/* remove leading/trailing whitespace from mailbox string */
 		mbox = ast_strip(mbox);
+		if (strstr("@",context) == NULL) {
+			strncat(context,"@",sizeof(context)-2);
+			strncat(context,peer->context,sizeof(context)-strlen(peer->context)-1);
+		}
+
 		strsep(&context, "@");
 
 		if (ast_strlen_zero(mbox)) {
@@ -29187,7 +29215,13 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			} else if (!strcasecmp(v->name, "use_q850_reason")) {
 				ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_Q850_REASON);
 			} else if (!strcasecmp(v->name, "encryption")) {
-				ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_USE_SRTP);
+				if (!strcasecmp(v->value, "try")) {
+					ast_set_flag(&peer->flags[1], SIP_PAGE2_USE_SRTP);
+					ast_set_flag(&peer->flags[2], SIP_PAGE3_SRTP_TRY);
+				} else {
+					ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_USE_SRTP);
+					ast_clear_flag(&peer->flags[2], SIP_PAGE3_SRTP_TRY);
+				}
 			} else if (!strcasecmp(v->name, "encryption_taglen")) {
 				ast_set2_flag(&peer->flags[2], !strcasecmp(v->value, "32"), SIP_PAGE3_SRTP_TAG_32);
 			} else if (!strcasecmp(v->name, "snom_aoc_enabled")) {
