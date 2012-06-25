@@ -81,6 +81,10 @@ context => parkedcalls          ; Which context parked calls are in (default par
 ;xfersound = beep               ; to indicate an attended transfer is complete
 ;xferfailsound = beeperr        ; to indicate a failed transfer
 ;pickupexten = *8               ; Configure the pickup extension. (default is *8)
+                                ; You can set a channel variable PICKUP_BRIDGE_MACRO
+                                ; to run a macro on a channel that is been picked up
+                                ; arguments can be passed to it by setting PICKUP_BRIDGE_MACRO_ARGS.
+                                ;
 ;pickupsound = beep             ; to indicate a successful pickup (default: no sound)
 ;pickupfailsound = beeperr      ; to indicate that the pickup failed (default: no sound)
 ;featuredigittimeout = 1000     ; Max time (ms) between digits for

@@ -3965,6 +3965,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	struct ast_cdr *new_peer_cdr = NULL; /* the proper chan cdr, if there are forked cdrs */
 	struct ast_silence_generator *silgen = NULL;
 	const char *h_context;
+	struct ast_datastore *ds;
 
 	pbx_builtin_setvar_helper(chan, "BRIDGEPEER", peer->name);
 	pbx_builtin_setvar_helper(peer, "BRIDGEPEER", chan->name);
@@ -4127,6 +4128,29 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	 * don't, well, what can we do about that? */
 	clear_dialed_interfaces(chan);
 	clear_dialed_interfaces(peer);
+
+	/*put channel in autoservice and lock while we run any bridging callbacks*/
+	ast_autoservice_start(chan);
+	ast_channel_lock(chan);
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->datastores, ds, entry) {
+		if (ds->info->bridge_fixup) {
+			ds->info->bridge_fixup(ds->data, chan, peer);
+		}
+	}
+	AST_LIST_TRAVERSE_SAFE_END;
+	ast_channel_unlock(chan);
+	ast_autoservice_stop(chan);
+
+	ast_autoservice_start(peer);
+	ast_channel_lock(peer);
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&peer->datastores, ds, entry) {
+		if (ds->info->bridge_fixup) {
+			ds->info->bridge_fixup(ds->data, peer, chan);
+		}
+	}
+	AST_LIST_TRAVERSE_SAFE_END;
+	ast_channel_unlock(peer);
+	ast_autoservice_stop(peer);
 
 	for (;;) {
 		struct ast_channel *other;	/* used later */
@@ -7369,11 +7393,29 @@ int ast_pickup_call(struct ast_channel *chan)
 	return res;
 }
 
+static void ast_pickup_bridge_fixup(void *data, struct ast_channel *chan, struct ast_channel *bridge)
+{
+	const char *bridge_macro;
+	const char *bridge_macro_args;
+
+	if ((bridge_macro = pbx_builtin_getvar_helper(chan, "PICKUP_BRIDGE_MACRO")) &&
+	    !ast_strlen_zero(bridge_macro)) {
+		bridge_macro_args = pbx_builtin_getvar_helper(chan, "PICKUP_BRIDGE_MACRO_ARGS");
+		ast_app_run_macro(NULL, bridge, bridge_macro, bridge_macro_args);
+	}
+}
+
+const struct ast_datastore_info pickup_target_info = {
+	.type = "pickup-call",
+	.bridge_fixup = ast_pickup_bridge_fixup,
+};
+
 int ast_do_pickup(struct ast_channel *chan, struct ast_channel *target)
 {
 	struct ast_party_connected_line connected_caller;
 	struct ast_channel *chans[2] = { chan, target };
 	struct ast_datastore *ds_pickup;
+	struct ast_datastore *ds_bridge_macro;
 	const char *chan_name;/*!< A masquerade changes channel names. */
 	const char *target_name;/*!< A masquerade changes channel names. */
 	int res = -1;
@@ -7389,6 +7431,16 @@ int ast_do_pickup(struct ast_channel *chan, struct ast_channel *target)
 		return -1;
 	}
 	ast_channel_datastore_add(target, ds_pickup);
+
+	/* Mark the channel so a macro can be run when about to be bridged
+	 * the datastore is left so a pickup can be detected.
+	 */
+	if ((ds_bridge_macro = ast_datastore_alloc(&pickup_target_info, NULL))) {
+		ast_channel_datastore_add(chan, ds_bridge_macro);
+	} else {
+		ast_log(LOG_WARNING,
+			"Unable to create channel datastore on '%s' for running macro\n", target_name);
+	}
 
 	ast_party_connected_line_init(&connected_caller);
 	ast_party_connected_line_copy(&connected_caller, &target->connected);
@@ -7444,6 +7496,9 @@ pickup_failed:
 		ast_datastore_free(ds_pickup);
 	}
 	ast_party_connected_line_free(&connected_caller);
+	if (res && ds_bridge_macro && !ast_channel_datastore_remove(chan, ds_bridge_macro)) {
+		ast_datastore_free(ds_bridge_macro);
+	}
 
 	return res;
 }

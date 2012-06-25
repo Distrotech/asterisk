@@ -28,6 +28,7 @@
 		LINKER_SYMBOL_PREFIXdevstate2str;
 		LINKER_SYMBOL_PREFIX__manager_event;
 		LINKER_SYMBOL_PREFIXdialed_interface_info;
+		LINKER_SYMBOL_PREFIXpickup_target_info;
 		LINKER_SYMBOL_PREFIXstrsep;
 		LINKER_SYMBOL_PREFIXsetenv;
 		LINKER_SYMBOL_PREFIXunsetenv;

@@ -48,6 +48,17 @@ struct ast_datastore_info {
 	 * \return nothing.
 	 */
 	void (*chan_fixup)(void *data, struct ast_channel *old_chan, struct ast_channel *new_chan);
+
+	/*!
+	 * \brief Callback to operate on bridge channel before entring bridge loop
+	 *
+	 * \arg data The datastore data
+	 * \arg chan channel owning the datastore (locked and running autoservice)
+	 * \arg bridge channel
+	 *
+	 * \return nothing.
+	 */
+	void (*bridge_fixup)(void *data, struct ast_channel *chan, struct ast_channel *bridge);
 };
 
 /*! \brief Structure for a data store object */
