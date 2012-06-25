@@ -93,6 +93,7 @@ struct ast_epoll_data {
 static int shutting_down;
 
 static int uniqueint;
+static int chancount;
 
 unsigned long global_fin, global_fout;
 
@@ -833,6 +834,11 @@ int ast_active_channels(void)
 	return channels ? ao2_container_count(channels) : 0;
 }
 
+int ast_undestroyed_channels(void)
+{
+	return ast_atomic_fetchadd_int(&chancount, 0);
+}
+
 /*! \brief Cancel a shutdown in progress */
 void ast_cancel_shutdown(void)
 {
@@ -1310,6 +1316,7 @@ __ast_channel_alloc_ap(int needqueue, int state, const char *cid_num, const char
 	ast_cdr_init(tmp->cdr, tmp);
 	ast_cdr_start(tmp->cdr);
 
+	ast_atomic_fetchadd_int(&chancount, +1);
 	ast_cel_report_event(tmp, AST_CEL_CHANNEL_START, NULL, NULL, NULL);
 
 	headp = &tmp->varshead;
@@ -2507,6 +2514,7 @@ static void ast_channel_destructor(void *obj)
 	}
 
 	chan->nativeformats = ast_format_cap_destroy(chan->nativeformats);
+	ast_atomic_fetchadd_int(&chancount, -1);
 }
 
 /*! \brief Free a dummy channel structure */
@@ -3183,16 +3191,19 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 		int fdno;
 	} *fdmap = NULL;
 
-	if ((sz = n * AST_MAX_FDS + nfds)) {
-		pfds = alloca(sizeof(*pfds) * sz);
-		fdmap = alloca(sizeof(*fdmap) * sz);
-	}
-
 	if (outfd)
 		*outfd = -99999;
 	if (exception)
 		*exception = 0;
 	
+	if ((sz = n * AST_MAX_FDS + nfds)) {
+		pfds = alloca(sizeof(*pfds) * sz);
+		fdmap = alloca(sizeof(*fdmap) * sz);
+	} else {
+		/* nothing to allocate and no FDs to check */
+		return NULL;
+	}
+
 	/* Perform any pending masquerades */
 	for (x = 0; x < n; x++) {
 		if (c[x]->masq && ast_do_masquerade(c[x])) {
@@ -6318,11 +6329,13 @@ static void __ast_change_name_nolink(struct ast_channel *chan, const char *newna
 void ast_change_name(struct ast_channel *chan, const char *newname)
 {
 	/* We must re-link, as the hash value will change here. */
-	ao2_unlink(channels, chan);
+	ao2_lock(channels);
 	ast_channel_lock(chan);
+	ao2_unlink(channels, chan);
 	__ast_change_name_nolink(chan, newname);
-	ast_channel_unlock(chan);
 	ao2_link(channels, chan);
+	ast_channel_unlock(chan);
+	ao2_unlock(channels);
 }
 
 void ast_channel_inherit_variables(const struct ast_channel *parent, struct ast_channel *child)
@@ -6379,8 +6392,7 @@ static void clone_variables(struct ast_channel *original, struct ast_channel *cl
 	struct ast_var_t *current, *newvar;
 	/* Append variables from clone channel into original channel */
 	/* XXX Is this always correct?  We have to in order to keep MACROS working XXX */
-	if (AST_LIST_FIRST(&clonechan->varshead))
-		AST_LIST_APPEND_LIST(&original->varshead, &clonechan->varshead, entries);
+	AST_LIST_APPEND_LIST(&original->varshead, &clonechan->varshead, entries);
 
 	/* then, dup the varshead list into the clone */
 	
@@ -6456,14 +6468,16 @@ static const char *oldest_linkedid(const char *a, const char *b)
  *  see if the channel's old linkedid is now being retired */
 static void ast_channel_change_linkedid(struct ast_channel *chan, const char *linkedid)
 {
+	ast_assert(linkedid != NULL);
 	/* if the linkedid for this channel is being changed from something, check... */
-	if (!ast_strlen_zero(chan->linkedid) && 0 != strcmp(chan->linkedid, linkedid)) {
-		ast_cel_check_retire_linkedid(chan);
+	if (!strcmp(chan->linkedid, linkedid)) {
+		return;
 	}
 
+	ast_cel_check_retire_linkedid(chan);
 	ast_string_field_set(chan, linkedid, linkedid);
+	ast_cel_linkedid_ref(linkedid);
 }
-
 
 /*!
   \brief Propagate the oldest linkedid between associated channels
