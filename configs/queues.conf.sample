@@ -72,6 +72,12 @@ monitor-type = MixMonitor
 ;
 ;check_state_unknown = no
 ;
+; log_membername_as_agent will cause app_queue to log the membername rather than
+; the interface for the ADDMEMBER and REMOVEMEMBER events when a state_interface
+; is set.  The default value (no) maintains backward compatibility.
+;
+;log_membername_as_agent = no
+;
 ;[markq]
 ;
 ; A sample call queue
@@ -210,6 +216,16 @@ monitor-type = MixMonitor
 ; Autopausedelay delay autopause for autopausedelay seconds from the
 ; last call if a member has not taken a call the delay has no effect.
 ;autopausedelay=60
+;
+; Autopausebusy controls whether or not a queue member is set as paused
+; automatically upon the member device reporting busy. The autopausedelay
+; option applies. Defaults to 'no'.
+;autopausebusy=no
+;
+; Autopauseunavail controls whether or not a queue member is set as paused
+; automatically upon the member device reporting congestion. The autopausedely
+; option applies. Defaults to 'no'.
+;autopauseunavail=no
 ;
 ; Maximum number of people waiting in the queue (0 for unlimited)
 ;
