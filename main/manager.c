@@ -1220,6 +1220,19 @@ static const struct permalias {
 	{ 0, "none" },
 };
 
+/*! \brief Checks to see if a string which can be used to evaluate functions should be rejected */
+static int function_capable_string_allowed_with_auths(const char *evaluating, int writepermlist)
+{
+	if (!(writepermlist & EVENT_FLAG_SYSTEM)
+		&& (
+			strstr(evaluating, "SHELL") ||       /* NoOp(${SHELL(rm -rf /)})  */
+			strstr(evaluating, "EVAL")           /* NoOp(${EVAL(${some_var_containing_SHELL})}) */
+		)) {
+		return 0;
+	}
+	return 1;
+}
+
 /*! \brief Convert authority code to a list of options */
 static const char *authority_to_str(int authority, struct ast_str **res)
 {
@@ -3220,6 +3233,12 @@ static int action_getvar(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
+	/* We don't want users with insufficient permissions using certain functions. */
+	if (!(function_capable_string_allowed_with_auths(varname, s->session->writeperm))) {
+		astman_send_error(s, m, "GetVar Access Forbidden: Variable");
+		return 0;
+	}
+
 	if (!ast_strlen_zero(name)) {
 		if (!(c = ast_channel_get_by_name(name))) {
 			astman_send_error(s, m, "No such channel");
@@ -3278,6 +3297,11 @@ static int action_status(struct mansession *s, const struct message *m)
 		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
 	} else {
 		idText[0] = '\0';
+	}
+
+	if (!(function_capable_string_allowed_with_auths(variables, s->session->writeperm))) {
+		astman_send_error(s, m, "Status Access Forbidden: Variables");
+		return 0;
 	}
 
 	if (all) {
@@ -3636,7 +3660,7 @@ static int action_command(struct mansession *s, const struct message *m)
 {
 	const char *cmd = astman_get_header(m, "Command");
 	const char *id = astman_get_header(m, "ActionID");
-	char *buf, *final_buf;
+	char *buf = NULL, *final_buf = NULL;
 	char template[] = "/tmp/ast-ami-XXXXXX";	/* template for temporary file */
 	int fd;
 	off_t l;
@@ -3651,7 +3675,11 @@ static int action_command(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-	fd = mkstemp(template);
+	if ((fd = mkstemp(template)) < 0) {
+		ast_log(AST_LOG_WARNING, "Failed to create temporary file for command: %s\n", strerror(errno));
+		astman_send_error(s, m, "Command response construction error");
+		return 0;
+	}
 
 	astman_append(s, "Response: Follows\r\nPrivilege: Command\r\n");
 	if (!ast_strlen_zero(id)) {
@@ -3659,30 +3687,45 @@ static int action_command(struct mansession *s, const struct message *m)
 	}
 	/* FIXME: Wedge a ActionID response in here, waiting for later changes */
 	ast_cli_command(fd, cmd);	/* XXX need to change this to use a FILE * */
-	l = lseek(fd, 0, SEEK_END);	/* how many chars available */
+	/* Determine number of characters available */
+	if ((l = lseek(fd, 0, SEEK_END)) < 0) {
+		ast_log(LOG_WARNING, "Failed to determine number of characters for command: %s\n", strerror(errno));
+		goto action_command_cleanup;
+	}
 
 	/* This has a potential to overflow the stack.  Hence, use the heap. */
-	buf = ast_calloc(1, l + 1);
-	final_buf = ast_calloc(1, l + 1);
-	if (buf) {
-		lseek(fd, 0, SEEK_SET);
-		if (read(fd, buf, l) < 0) {
-			ast_log(LOG_WARNING, "read() failed: %s\n", strerror(errno));
-		}
-		buf[l] = '\0';
-		if (final_buf) {
-			term_strip(final_buf, buf, l);
-			final_buf[l] = '\0';
-		}
-		astman_append(s, "%s", S_OR(final_buf, buf));
-		ast_free(buf);
+	buf = ast_malloc(l + 1);
+	final_buf = ast_malloc(l + 1);
+
+	if (!buf || !final_buf) {
+		ast_log(LOG_WARNING, "Failed to allocate memory for temporary buffer\n");
+		goto action_command_cleanup;
 	}
+
+	if (lseek(fd, 0, SEEK_SET) < 0) {
+		ast_log(LOG_WARNING, "Failed to set position on temporary file for command: %s\n", strerror(errno));
+		goto action_command_cleanup;
+	}
+
+	if (read(fd, buf, l) < 0) {
+		ast_log(LOG_WARNING, "read() failed: %s\n", strerror(errno));
+		goto action_command_cleanup;
+	}
+
+	buf[l] = '\0';
+	term_strip(final_buf, buf, l);
+	final_buf[l] = '\0';
+	astman_append(s, "%s", final_buf);
+
+action_command_cleanup:
+
 	close(fd);
 	unlink(template);
 	astman_append(s, "--END COMMAND--\r\n\r\n");
-	if (final_buf) {
-		ast_free(final_buf);
-	}
+
+	ast_free(buf);
+	ast_free(final_buf);
+
 	return 0;
 }
 
@@ -4082,7 +4125,8 @@ static int action_originate(struct mansession *s, const struct message *m)
 		ast_parse_allow_disallow(NULL, cap, codecs, 1);
 	}
 
-	if (!ast_strlen_zero(app)) {
+	if (!ast_strlen_zero(app) && s->session) {
+		int bad_appdata = 0;
 		/* To run the System application (or anything else that goes to
 		 * shell), you must have the additional System privilege */
 		if (!(s->session->writeperm & EVENT_FLAG_SYSTEM)
@@ -4093,10 +4137,13 @@ static int action_originate(struct mansession *s, const struct message *m)
 				                                     TryExec(System(rm -rf /)) */
 				strcasestr(app, "agi") ||         /* AGI(/bin/rm,-rf /)
 				                                     EAGI(/bin/rm,-rf /)       */
-				strstr(appdata, "SHELL") ||       /* NoOp(${SHELL(rm -rf /)})  */
-				strstr(appdata, "EVAL")           /* NoOp(${EVAL(${some_var_containing_SHELL})}) */
+				strcasestr(app, "mixmonitor") ||  /* MixMonitor(blah,,rm -rf)  */
+				(strstr(appdata, "SHELL") && (bad_appdata = 1)) ||       /* NoOp(${SHELL(rm -rf /)})  */
+				(strstr(appdata, "EVAL") && (bad_appdata = 1))           /* NoOp(${EVAL(${some_var_containing_SHELL})}) */
 				)) {
-			astman_send_error(s, m, "Originate with certain 'Application' arguments requires the additional System privilege, which you do not have.");
+			char error_buf[64];
+			snprintf(error_buf, sizeof(error_buf), "Originate Access Forbidden: %s", bad_appdata ? "Data" : "Application");
+			astman_send_error(s, m, error_buf);
 			res = 0;
 			goto fast_orig_cleanup;
 		}
@@ -5854,7 +5901,7 @@ static void process_output(struct mansession *s, struct ast_str **out, struct as
 	fprintf(s->f, "%c", 0);
 	fflush(s->f);
 
-	if ((l = ftell(s->f))) {
+	if ((l = ftell(s->f)) > 0) {
 		if (MAP_FAILED == (buf = mmap(NULL, l, PROT_READ | PROT_WRITE, MAP_PRIVATE, s->fd, 0))) {
 			ast_log(LOG_WARNING, "mmap failed.  Manager output was not processed\n");
 		} else {
