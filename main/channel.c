@@ -2191,6 +2191,9 @@ int ast_party_id_presentation(const struct ast_party_id *id)
 	if (name_priority < number_priority) {
 		number_value = name_value;
 	}
+	if (number_value == AST_PRES_UNAVAILABLE) {
+		return AST_PRES_NUMBER_NOT_AVAILABLE;
+	}
 
 	return number_value | number_screening;
 }
@@ -4029,12 +4032,14 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 						ast_party_connected_line_free(&connected);
 						break;
 					}
+					ast_channel_unlock(chan);
 					if (ast_channel_connected_line_macro(NULL, chan, &connected, 1, 0)) {
 						ast_indicate_data(chan, AST_CONTROL_CONNECTED_LINE,
 							read_action_payload->payload,
 							read_action_payload->payload_size);
 					}
 					ast_party_connected_line_free(&connected);
+					ast_channel_lock(chan);
 					break;
 				}
 				ast_frfree(f);
@@ -4989,15 +4994,19 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		if (ast_format_cmp(&fr->subclass.format, &chan->rawwriteformat) != AST_FORMAT_CMP_NOT_EQUAL) {
 			f = fr;
 		} else {
-			/* XXX Something is not right we are not compatible with this frame bad things can happen
-			 * problems range from no/one-way audio to unexplained line hangups as a last resort try adjust the format
-			 * ideally we do not want to do this and this indicates a deeper problem for now we log these events to
-			 * eliminate user impact and help identify the problem areas
-			 * JIRA issues related to this :-
-			 * ASTERISK-14384, ASTERISK-17502, ASTERISK-17541, ASTERISK-18063, ASTERISK-18325, ASTERISK-18422*/
 			if ((!ast_format_cap_iscompatible(chan->nativeformats, &fr->subclass.format)) &&
 			    (ast_format_cmp(&chan->writeformat, &fr->subclass.format) != AST_FORMAT_CMP_EQUAL)) {
 				char nf[512];
+
+				/*
+				 * XXX Something is not right.  We are not compatible with this
+				 * frame.  Bad things can happen.  Problems range from no audio,
+				 * one-way audio, to unexplained line hangups.  As a last resort
+				 * try to adjust the format.  Ideally, we do not want to do this
+				 * because it indicates a deeper problem.  For now, we log these
+				 * events to reduce user impact and help identify the problem
+				 * areas.
+				 */
 				ast_log(LOG_WARNING, "Codec mismatch on channel %s setting write format to %s from %s native formats %s\n",
 					chan->name, ast_getformatname(&fr->subclass.format), ast_getformatname(&chan->writeformat),
 					ast_getformatname_multiple(nf, sizeof(nf), chan->nativeformats));
@@ -9588,10 +9597,16 @@ int ast_channel_connected_line_macro(struct ast_channel *autoservice_chan, struc
 	}
 	ast_channel_unlock(macro_chan);
 
-	if (!(retval = ast_app_run_macro(autoservice_chan, macro_chan, macro, macro_args))) {
+	retval = ast_app_run_macro(autoservice_chan, macro_chan, macro, macro_args);
+	if (!retval) {
+		struct ast_party_connected_line saved_connected;
+
+		ast_party_connected_line_init(&saved_connected);
 		ast_channel_lock(macro_chan);
-		ast_channel_update_connected_line(macro_chan, &macro_chan->connected, NULL);
+		ast_party_connected_line_copy(&saved_connected, &macro_chan->connected);
 		ast_channel_unlock(macro_chan);
+		ast_channel_update_connected_line(macro_chan, &saved_connected, NULL);
+		ast_party_connected_line_free(&saved_connected);
 	}
 
 	return retval;
@@ -9629,9 +9644,14 @@ int ast_channel_redirecting_macro(struct ast_channel *autoservice_chan, struct a
 
 	retval = ast_app_run_macro(autoservice_chan, macro_chan, macro, macro_args);
 	if (!retval) {
+		struct ast_party_redirecting saved_redirecting;
+
+		ast_party_redirecting_init(&saved_redirecting);
 		ast_channel_lock(macro_chan);
-		ast_channel_update_redirecting(macro_chan, &macro_chan->redirecting, NULL);
+		ast_party_redirecting_copy(&saved_redirecting, &macro_chan->redirecting);
 		ast_channel_unlock(macro_chan);
+		ast_channel_update_redirecting(macro_chan, &saved_redirecting, NULL);
+		ast_party_redirecting_free(&saved_redirecting);
 	}
 
 	return retval;
