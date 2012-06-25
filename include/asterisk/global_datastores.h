@@ -28,6 +28,7 @@
 
 extern const struct ast_datastore_info dialed_interface_info;
 extern const struct ast_datastore_info secure_call_info;
+extern const struct ast_datastore_info pickup_target_info;
 
 struct ast_dialed_interface {
 	AST_LIST_ENTRY(ast_dialed_interface) list;

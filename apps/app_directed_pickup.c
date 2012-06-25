@@ -91,6 +91,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			matching channels by the dial application that created the channel.  The
 			<replaceable>context</replaceable> is set on matching channels by the
 			channel driver for the device.</para></note>
+			If the channel variable <variable>PICKUP_BRIDGE_MACRO</variable> is set this macro will run
+			on the picked up channel using the channel variable <variable>PICKUP_BRIDGE_MACRO_ARGS</variable>
+			as arguments.</para>
 		</description>
 	</application>
 	<application name="PickupChan" language="en_US">
@@ -111,7 +114,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</parameter>
 		</syntax>
 		<description>
-			<para>This will pickup a specified <replaceable>channel</replaceable> if ringing.</para>
+			<para>This will pickup a specified <replaceable>channel</replaceable> if ringing.
+			If the channel variable <variable>PICKUP_BRIDGE_MACRO</variable> is set this macro will run
+			on the picked up channel using the channel variable <variable>PICKUP_BRIDGE_MACRO_ARGS</variable>
+			as arguments.</para>
 		</description>
 	</application>
  ***/
