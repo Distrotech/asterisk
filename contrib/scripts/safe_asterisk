@@ -6,14 +6,14 @@ ASTVARRUNDIR=__ASTERISK_VARRUN_DIR__
 ASTVARLOGDIR=__ASTERISK_LOG_DIR__
 
 CLIARGS="$*"					# Grab any args passed to safe_asterisk
-TTY=9						# TTY (if you want one) for Asterisk to run on
+#TTY=9						# TTY (if you want one) for Asterisk to run on
 CONSOLE=yes					# Whether or not you want a console
 #NOTIFY=root@localhost.localdomain		# Who to notify about crashes
 #EXEC=/path/to/somescript			# Run this command if Asterisk crashes
 #LOGFILE=${ASTVARLOGDIR}/safe_asterisk.log	# Where to place the normal logfile (disabled if blank)
 #SYSLOG=local0					# Which syslog facility to use (disabled if blank)
 MACHINE=`hostname`				# To specify which machine has crashed when getting the mail
-DUMPDROP=/tmp
+DUMPDROP=/var/cores/asterisk
 SLEEPSECS=4
 ASTPIDFILE=${ASTVARRUNDIR}/asterisk.pid
 
@@ -22,7 +22,7 @@ ASTPIDFILE=${ASTVARRUNDIR}/asterisk.pid
 KILLALLMPG123=1
 
 # run asterisk with this priority
-PRIORITY=0
+PRIORITY=-19
 
 # set system filemax on supported OSes if this variable is set
 # SYSMAXFILES=262144
@@ -120,6 +120,9 @@ if test "x$TTY" != "x" ; then
 	if test "x$CONSOLE" != "xno" ; then
 		ASTARGS="${ASTARGS} -c"
 	fi
+fi
+if [ ! -d ${DUMPDROP} ] && [ ! -e ${DUMPDROP} ];then
+	mkdir -p ${DUMPDROP}
 fi
 if test ! -w "${DUMPDROP}" ; then	
 	message "Cannot write to ${DUMPDROP}"

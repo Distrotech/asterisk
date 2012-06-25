@@ -128,7 +128,7 @@ DEBUG=-g3
 # Asterisk.conf is located in ASTETCDIR or by using the -C flag
 # when starting Asterisk
 ASTCONFPATH=$(ASTETCDIR)/asterisk.conf
-MODULES_DIR=$(ASTLIBDIR)/modules
+MODULES_DIR=$(ASTLIBDIR)/modules-10
 AGI_DIR=$(ASTDATADIR)/agi-bin
 
 # If you use Apache, you may determine by a grep 'DocumentRoot' of your httpd.conf file
