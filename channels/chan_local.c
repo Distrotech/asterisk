@@ -693,9 +693,10 @@ static int local_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 static int local_indicate(struct ast_channel *ast, int condition, const void *data, size_t datalen)
 {
 	struct local_pvt *p = ast->tech_pvt;
+	struct ast_channel *bridge;
 	int res = 0;
 	struct ast_frame f = { AST_FRAME_CONTROL, };
-	int isoutbound;
+	int isoutbound = IS_OUTBOUND(ast, p);
 
 	if (!p)
 		return -1;
@@ -718,7 +719,6 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 		 * happens to be in this control frame. The same applies for redirecting information, which
 		 * is why it is handled here as well.*/
 		ao2_lock(p);
-		isoutbound = IS_OUTBOUND(ast, p);
 		if (isoutbound) {
 			this_channel = p->chan;
 			the_other_channel = p->owner;
@@ -741,6 +741,30 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 			res = local_queue_frame(p, isoutbound, &f, ast, 1);
 		}
 		ao2_unlock(p);
+	} else if (!isoutbound && (condition == AST_CONTROL_SRCUPDATE)) {
+		bridge = ast_bridged_channel(ast);
+		ao2_lock(p);
+		/* fixup audio formats nativeformat might have changed we must adjust.
+		 * ast is p->owner and is locked here*/
+		if (p->chan && bridge && (bridge != p->chan) &&
+		    !ast_format_cap_identical(bridge->nativeformats, ast->nativeformats)) {
+			if (!ast_channel_trylock(p->chan)) {
+				ast_format_cap_copy(ast->nativeformats, bridge->nativeformats);
+				ast_set_read_format(ast, &ast->readformat);
+				ast_set_write_format(ast, &ast->writeformat);
+				ast_format_cap_copy(p->chan->nativeformats, bridge->nativeformats);
+				ast_set_read_format(p->chan, &p->chan->readformat);
+				ast_set_write_format(p->chan, &p->chan->writeformat);
+				ast_channel_unlock(p->chan);
+			} else {
+				ast_verb(3, "Tried to get lock on %s to set audio format but failed\n", p->chan->name);
+			}
+		}
+		f.subclass.integer = condition;
+		f.data.ptr = (void*)data;
+		f.datalen = datalen;
+		res = local_queue_frame(p, isoutbound, &f, ast, 1);
+		ao2_unlock(p);
 	} else {
 		/* Queue up a frame representing the indication as a control frame */
 		ao2_lock(p);
@@ -750,7 +774,6 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 		 * when initially connected to slow the optimization process.
 		 */
 		if (0 <= condition || ast_test_flag(p, LOCAL_NO_OPTIMIZATION)) {
-			isoutbound = IS_OUTBOUND(ast, p);
 			f.subclass.integer = condition;
 			f.data.ptr = (void *) data;
 			f.datalen = datalen;
