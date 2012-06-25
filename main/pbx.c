@@ -543,7 +543,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>This application will play the sounds that correspond to the given <replaceable>digits</replaceable>.
 			Optionally, a <replaceable>gender</replaceable> may be specified. This will use the language that is currently
-			set for the channel. See the LANGUAGE() function for more information on setting the language for the channel.</para>
+			set for the channel. See the CHANNEL() function for more information on setting the language for the channel.</para>
 		</description>
 		<see-also>
 			<ref type="application">SayAlpha</ref>
@@ -7605,6 +7605,7 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, struct ast_
 			AST_LIST_INSERT_HEAD(&hints_stored, saved_hint, list);
 		}
 	}
+	ao2_iterator_destroy(&i);
 
 	/* save the old table and list */
 	oldtable = contexts_table;

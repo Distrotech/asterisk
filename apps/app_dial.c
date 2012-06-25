@@ -203,8 +203,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<para>Asterisk will ignore any forwarding requests it may receive on this dial attempt.</para>
 				</option>
 				<option name="I">
-					<para>Asterisk will ignore any connected line update requests or redirecting party update
-					requests it may receiveon this dial attempt.</para>
+					<para>Asterisk will ignore any connected line update requests or any redirecting party
+					update requests it may receive on this dial attempt.</para>
 				</option>
 				<option name="k">
 					<para>Allow the called party to enable parking of the call by sending
@@ -2307,7 +2307,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 		tc->dialed.transit_network_select = chan->dialed.transit_network_select;
 
 		if (!ast_strlen_zero(chan->accountcode)) {
-			ast_string_field_set(tc, peeraccount, chan->accountcode);
+			ast_string_field_set(tc, accountcode, chan->accountcode);
 		}
 		if (ast_strlen_zero(tc->musicclass))
 			ast_string_field_set(tc, musicclass, chan->musicclass);

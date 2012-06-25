@@ -808,7 +808,7 @@ struct sip_dual {
 	struct ast_channel *chan1;   /*!< First channel involved */
 	struct ast_channel *chan2;   /*!< Second channel involved */
 	struct sip_request req;      /*!< Request that caused the transfer (REFER) */
-	int seqno;                   /*!< Sequence number */
+	uint32_t seqno;              /*!< Sequence number */
 	char *park_exten;
 	char *park_context;
 };
@@ -953,6 +953,17 @@ struct offered_media {
 	char codecs[128];
 };
 
+/*! Additional headers to send with MESSAGE method packet. */
+struct sip_msg_hdr {
+	AST_LIST_ENTRY(sip_msg_hdr) next;
+	/*! Name of header to stick in MESSAGE */
+	const char *name;
+	/*! Value of header to stick in MESSAGE */
+	const char *value;
+	/*! The name and value strings are stuffed here in that order. */
+	char stuff[0];
+};
+
 /*! \brief Structure used for each SIP dialog, ie. a call, a registration, a subscribe.
  * Created and initialized by sip_alloc(), the descriptor goes into the list of
  * descriptors (dialoglist).
@@ -1013,9 +1024,9 @@ struct sip_pvt {
 	char via[128];                          /*!< Via: header */
 	int maxforwards;                        /*!< SIP Loop prevention */
 	struct sip_socket socket;               /*!< The socket used for this dialog */
-	unsigned int ocseq;                     /*!< Current outgoing seqno */
-	unsigned int icseq;                     /*!< Current incoming seqno */
-	unsigned int init_icseq;                /*!< Initial incoming seqno from first request */
+	uint32_t ocseq;                         /*!< Current outgoing seqno */
+	uint32_t icseq;                         /*!< Current incoming seqno */
+	uint32_t init_icseq;                    /*!< Initial incoming seqno from first request */
 	ast_group_t callgroup;                  /*!< Call group */
 	ast_group_t pickupgroup;                /*!< Pickup group */
 	int lastinvite;                         /*!< Last Cseq of invite */
@@ -1090,8 +1101,8 @@ struct sip_pvt {
 	unsigned int stalenonce:1;          /*!< Marks the current nonce as responded too */
 	char lastmsg[256];                  /*!< Last Message sent/received */
 	int amaflags;                       /*!< AMA Flags */
-	int pendinginvite;    /*!< Any pending INVITE or state NOTIFY (in subscribe pvt's) ? (seqno of this) */
-	int glareinvite;      /*!< A invite received while a pending invite is already present is stored here.  Its seqno is the
+	uint32_t pendinginvite; /*!< Any pending INVITE or state NOTIFY (in subscribe pvt's) ? (seqno of this) */
+	uint32_t glareinvite;      /*!< A invite received while a pending invite is already present is stored here.  Its seqno is the
 	                           value. Since this glare invite's seqno is not the same as the pending invite's, it must be
 	                           held in order to properly process acknowledgements for our 491 response. */
 	struct sip_request initreq;         /*!< Latest request that opened a new transaction
@@ -1106,7 +1117,7 @@ struct sip_pvt {
 	enum subscriptiontype subscribed;   /*!< SUBSCRIBE: Is this dialog a subscription?  */
 	int stateid;                        /*!< SUBSCRIBE: ID for devicestate subscriptions */
 	int laststate;                      /*!< SUBSCRIBE: Last known extension state */
-	int dialogver;                      /*!< SUBSCRIBE: Version for subscription dialog-info */
+	uint32_t dialogver;                 /*!< SUBSCRIBE: Version for subscription dialog-info */
 
 	struct ast_dsp *dsp;                /*!< Inband DTMF or Fax CNG tone Detection dsp */
 
@@ -1120,6 +1131,7 @@ struct sip_pvt {
 	struct sip_history_head *history;   /*!< History of this SIP dialog */
 	size_t history_entries;             /*!< Number of entires in the history */
 	struct ast_variable *chanvars;      /*!< Channel variables to set for inbound call */
+	AST_LIST_HEAD_NOLOCK(, sip_msg_hdr) msg_headers; /*!< Additional MESSAGE headers to send. */
 	AST_LIST_HEAD_NOLOCK(request_queue, sip_request) request_queue; /*!< Requests that arrived but could not be processed immediately */
 	struct sip_invite_param *options;   /*!< Options for INVITE */
 	struct sip_st_dlg *stimer;          /*!< SIP Session-Timers */
@@ -1171,7 +1183,7 @@ struct sip_pkt {
 	struct sip_pkt *next;     /*!< Next packet in linked list */
 	int retrans;              /*!< Retransmission number */
 	int method;               /*!< SIP method for this packet */
-	int seqno;                /*!< Sequence number */
+	uint32_t seqno;           /*!< Sequence number */
 	char is_resp;             /*!< 1 if this is a response packet (e.g. 200 OK), 0 if it is a request */
 	char is_fatal;            /*!< non-zero if there is a fatal error */
 	int response_code;        /*!< If this is a response, the response code */
@@ -1346,7 +1358,7 @@ struct sip_registry {
 	enum sipregistrystate regstate; /*!< Registration state (see above) */
 	struct timeval regtime;         /*!< Last successful registration time */
 	int callid_valid;       /*!< 0 means we haven't chosen callid for this registry yet. */
-	unsigned int ocseq;     /*!< Sequence number we got to for REGISTERs for this registry */
+	uint32_t ocseq;         /*!< Sequence number we got to for REGISTERs for this registry */
 	struct ast_dnsmgr_entry *dnsmgr;  /*!<  DNS refresh manager for register */
 	struct ast_sockaddr us;  /*!< Who the server thinks we are */
 	int noncecount;         /*!< Nonce-count */
@@ -1360,6 +1372,7 @@ struct tcptls_packet {
 };
 /*! \brief Definition of a thread that handles a socket */
 struct sip_threadinfo {
+	/*! TRUE if the thread needs to kill itself.  (The module is being unloaded.) */
 	int stop;
 	int alert_pipe[2];          /*! Used to alert tcptls thread when packet is ready to be written */
 	pthread_t threadid;

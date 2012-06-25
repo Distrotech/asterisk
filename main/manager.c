@@ -3515,7 +3515,7 @@ static int action_redirect(struct mansession *s, const struct message *m)
 					ast_set_flag(chan2, AST_FLAG_BRIDGE_HANGUP_DONT); /* don't let the after-bridge code run the h-exten */
 					ast_channel_unlock(chan2);
 				}
-				if (context2) {
+				if (!ast_strlen_zero(context2)) {
 					res = ast_async_goto(chan2, context2, exten2, pi2);
 				} else {
 					res = ast_async_goto(chan2, context, exten, pi);
@@ -3535,10 +3535,7 @@ static int action_redirect(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "Redirect failed");
 	}
 
-	if (chan) {
-		chan = ast_channel_unref(chan);
-	}
-
+	chan = ast_channel_unref(chan);
 	if (chan2) {
 		chan2 = ast_channel_unref(chan2);
 	}
@@ -3687,12 +3684,12 @@ static int action_command(struct mansession *s, const struct message *m)
 
 /*! \brief helper function for originate */
 struct fast_originate_helper {
-	char tech[AST_MAX_EXTENSION];
-	/*! data can contain a channel name, extension number, username, password, etc. */
-	char data[512];
 	int timeout;
 	struct ast_format_cap *cap;				/*!< Codecs used for a call */
 	AST_DECLARE_STRING_FIELDS (
+		AST_STRING_FIELD(tech);
+		/*! data can contain a channel name, extension number, username, password, etc. */
+		AST_STRING_FIELD(data);
 		AST_STRING_FIELD(app);
 		AST_STRING_FIELD(appdata);
 		AST_STRING_FIELD(cid_name);
@@ -3706,6 +3703,21 @@ struct fast_originate_helper {
 	struct ast_variable *vars;
 };
 
+/*!
+ * \internal
+ *
+ * \param doomed Struct to destroy.
+ *
+ * \return Nothing
+ */
+static void destroy_fast_originate_helper(struct fast_originate_helper *doomed)
+{
+	ast_format_cap_destroy(doomed->cap);
+	ast_variables_destroy(doomed->vars);
+	ast_string_field_free_memory(doomed);
+	ast_free(doomed);
+}
+
 static void *fast_originate(void *data)
 {
 	struct fast_originate_helper *in = data;
@@ -3715,16 +3727,20 @@ static void *fast_originate(void *data)
 	char requested_channel[AST_CHANNEL_NAME];
 
 	if (!ast_strlen_zero(in->app)) {
-		res = ast_pbx_outgoing_app(in->tech, in->cap, in->data, in->timeout, in->app, in->appdata, &reason, 1,
+		res = ast_pbx_outgoing_app(in->tech, in->cap, (char *) in->data,
+			in->timeout, in->app, in->appdata, &reason, 1,
 			S_OR(in->cid_num, NULL),
 			S_OR(in->cid_name, NULL),
 			in->vars, in->account, &chan);
 	} else {
-		res = ast_pbx_outgoing_exten(in->tech, in->cap, in->data, in->timeout, in->context, in->exten, in->priority, &reason, 1,
+		res = ast_pbx_outgoing_exten(in->tech, in->cap, (char *) in->data,
+			in->timeout, in->context, in->exten, in->priority, &reason, 1,
 			S_OR(in->cid_num, NULL),
 			S_OR(in->cid_name, NULL),
 			in->vars, in->account, &chan);
 	}
+	/* Any vars memory was passed to the ast_pbx_outgoing_xxx() calls. */
+	in->vars = NULL;
 
 	if (!chan) {
 		snprintf(requested_channel, AST_CHANNEL_NAME, "%s/%s", in->tech, in->data);
@@ -3732,7 +3748,7 @@ static void *fast_originate(void *data)
 	/* Tell the manager what happened with the channel */
 	chans[0] = chan;
 	ast_manager_event_multichan(EVENT_FLAG_CALL, "OriginateResponse", chan ? 1 : 0, chans,
-		"%s%s"
+		"%s"
 		"Response: %s\r\n"
 		"Channel: %s\r\n"
 		"Context: %s\r\n"
@@ -3741,7 +3757,7 @@ static void *fast_originate(void *data)
 		"Uniqueid: %s\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n",
-		in->idtext, ast_strlen_zero(in->idtext) ? "" : "\r\n", res ? "Failure" : "Success",
+		in->idtext, res ? "Failure" : "Success",
 		chan ? chan->name : requested_channel, in->context, in->exten, reason,
 		chan ? chan->uniqueid : "<null>",
 		S_OR(in->cid_num, "<unknown>"),
@@ -3752,9 +3768,7 @@ static void *fast_originate(void *data)
 	if (chan) {
 		ast_channel_unlock(chan);
 	}
-	in->cap = ast_format_cap_destroy(in->cap);
-	ast_string_field_free_memory(in);
-	ast_free(in);
+	destroy_fast_originate_helper(in);
 	return NULL;
 }
 
@@ -4088,18 +4102,19 @@ static int action_originate(struct mansession *s, const struct message *m)
 	vars = astman_get_variables(m);
 
 	if (ast_true(async)) {
-		struct fast_originate_helper *fast = ast_calloc(1, sizeof(*fast));
+		struct fast_originate_helper *fast;
+
+		fast = ast_calloc(1, sizeof(*fast));
 		if (!fast || ast_string_field_init(fast, 252)) {
-			if (fast) {
-				ast_free(fast);
-			}
+			ast_free(fast);
+			ast_variables_destroy(vars);
 			res = -1;
 		} else {
 			if (!ast_strlen_zero(id)) {
-				ast_string_field_build(fast, idtext, "ActionID: %s", id);
+				ast_string_field_build(fast, idtext, "ActionID: %s\r\n", id);
 			}
-			ast_copy_string(fast->tech, tech, sizeof(fast->tech));
-			ast_copy_string(fast->data, data, sizeof(fast->data));
+			ast_string_field_set(fast, tech, tech);
+			ast_string_field_set(fast, data, data);
 			ast_string_field_set(fast, app, app);
 			ast_string_field_set(fast, appdata, appdata);
 			ast_string_field_set(fast, cid_num, l);
@@ -4113,9 +4128,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 			fast->timeout = to;
 			fast->priority = pi;
 			if (ast_pthread_create_detached(&th, NULL, fast_originate, fast)) {
-				ast_format_cap_destroy(fast->cap);
-				ast_string_field_free_memory(fast);
-				ast_free(fast);
+				destroy_fast_originate_helper(fast);
 				res = -1;
 			} else {
 				res = 0;
@@ -4123,14 +4136,14 @@ static int action_originate(struct mansession *s, const struct message *m)
 		}
 	} else if (!ast_strlen_zero(app)) {
 		res = ast_pbx_outgoing_app(tech, cap, data, to, app, appdata, &reason, 1, l, n, vars, account, NULL);
+		/* Any vars memory was passed to ast_pbx_outgoing_app(). */
 	} else {
 		if (exten && context && pi) {
 			res = ast_pbx_outgoing_exten(tech, cap, data, to, context, exten, pi, &reason, 1, l, n, vars, account, NULL);
+			/* Any vars memory was passed to ast_pbx_outgoing_exten(). */
 		} else {
 			astman_send_error(s, m, "Originate with 'Exten' requires 'Context' and 'Priority'");
-			if (vars) {
-				ast_variables_destroy(vars);
-			}
+			ast_variables_destroy(vars);
 			res = 0;
 			goto fast_orig_cleanup;
 		}
@@ -6619,6 +6632,7 @@ static int __init_manager(int reload)
 	char a1_hash[256];
 	struct sockaddr_in ami_desc_local_address_tmp = { 0, };
 	struct sockaddr_in amis_desc_local_address_tmp = { 0, };
+	int tls_was_enabled = 0;
 
 	manager_enabled = 0;
 
@@ -6682,10 +6696,15 @@ static int __init_manager(int reload)
 
 	/* default values */
 	ast_copy_string(global_realm, S_OR(ast_config_AST_SYSTEM_NAME, DEFAULT_REALM), sizeof(global_realm));
-	memset(&ami_desc.local_address, 0, sizeof(struct sockaddr_in));
-	memset(&amis_desc.local_address, 0, sizeof(amis_desc.local_address));
-	amis_desc_local_address_tmp.sin_port = htons(5039);
+	ast_sockaddr_setnull(&ami_desc.local_address);
+	ast_sockaddr_setnull(&amis_desc.local_address);
+
+	ami_desc_local_address_tmp.sin_family = AF_INET;
+	amis_desc_local_address_tmp.sin_family = AF_INET;
+
 	ami_desc_local_address_tmp.sin_port = htons(DEFAULT_MANAGER_PORT);
+
+	tls_was_enabled = (reload && ami_tls_cfg.enabled);
 
 	ami_tls_cfg.enabled = 0;
 	if (ami_tls_cfg.certfile) {
@@ -6760,13 +6779,16 @@ static int __init_manager(int reload)
 		}
 	}
 
-	ami_desc_local_address_tmp.sin_family = AF_INET;
-	amis_desc_local_address_tmp.sin_family = AF_INET;
+	ast_sockaddr_to_sin(&amis_desc.local_address, &amis_desc_local_address_tmp);
 
 	/* if the amis address has not been set, default is the same as non secure ami */
 	if (!amis_desc_local_address_tmp.sin_addr.s_addr) {
 		amis_desc_local_address_tmp.sin_addr =
 		    ami_desc_local_address_tmp.sin_addr;
+	}
+
+	if (!amis_desc_local_address_tmp.sin_port) {
+		amis_desc_local_address_tmp.sin_port = htons(DEFAULT_MANAGER_TLS_PORT);
 	}
 
 	if (manager_enabled) {
@@ -7005,7 +7027,9 @@ static int __init_manager(int reload)
 	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Module: Manager\r\nStatus: %s\r\nMessage: Manager reload Requested\r\n", manager_enabled ? "Enabled" : "Disabled");
 
 	ast_tcptls_server_start(&ami_desc);
-	if (ast_ssl_setup(amis_desc.tls_cfg)) {
+	if (tls_was_enabled && !ami_tls_cfg.enabled) {
+		ast_tcptls_server_stop(&amis_desc);
+	} else if (ast_ssl_setup(amis_desc.tls_cfg)) {
 		ast_tcptls_server_start(&amis_desc);
 	}
 	return 0;

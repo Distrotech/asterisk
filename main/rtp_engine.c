@@ -1504,6 +1504,10 @@ void ast_rtp_instance_early_bridge_make_compatible(struct ast_channel *c0, struc
 		ast_rtp_codecs_payloads_copy(&tinstance0->codecs, &tinstance1->codecs, tinstance1);
 	}
 
+        if (glue0->update_peer(c0, instance1, vinstance1, tinstance1, cap1, 0)) {
+                ast_log(LOG_WARNING, "Channel '%s' failed to setup early bridge to '%s'\n", c0->name, c1 ? c1->name : "<unspecified>");
+        }
+
 	res = 0;
 
 done:
@@ -1852,17 +1856,24 @@ int ast_rtp_engine_srtp_is_registered(void)
 	return res_srtp && res_srtp_policy;
 }
 
-int ast_rtp_instance_add_srtp_policy(struct ast_rtp_instance *instance, struct ast_srtp_policy *policy)
+int ast_rtp_instance_add_srtp_policy(struct ast_rtp_instance *instance, struct ast_srtp_policy *remote_policy, struct ast_srtp_policy *local_policy)
 {
+	int res = 0;
+
 	if (!res_srtp) {
 		return -1;
 	}
 
 	if (!instance->srtp) {
-		return res_srtp->create(&instance->srtp, instance, policy);
+		res = res_srtp->create(&instance->srtp, instance, remote_policy);
 	} else {
-		return res_srtp->add_stream(instance->srtp, policy);
+		res = res_srtp->replace(&instance->srtp, instance, remote_policy);
 	}
+	if (!res) {
+		res = res_srtp->add_stream(instance->srtp, local_policy);
+	}
+
+	return res;
 }
 
 struct ast_srtp *ast_rtp_instance_get_srtp(struct ast_rtp_instance *instance)
@@ -1994,6 +2005,7 @@ int ast_rtp_engine_init()
 	set_next_mime_type(ast_format_set(&tmpfmt, AST_FORMAT_ADPCM, 0), 0, "audio", "DVI4", 8000);
 	set_next_mime_type(ast_format_set(&tmpfmt, AST_FORMAT_SLINEAR, 0), 0, "audio", "L16", 8000);
 	set_next_mime_type(ast_format_set(&tmpfmt, AST_FORMAT_SLINEAR16, 0), 0, "audio", "L16", 16000);
+	set_next_mime_type(ast_format_set(&tmpfmt, AST_FORMAT_SLINEAR16, 0), 0, "audio", "L16-256", 16000);
 	set_next_mime_type(ast_format_set(&tmpfmt, AST_FORMAT_LPC10, 0), 0, "audio", "LPC", 8000);
 	set_next_mime_type(ast_format_set(&tmpfmt, AST_FORMAT_G729A, 0), 0, "audio", "G729", 8000);
 	set_next_mime_type(ast_format_set(&tmpfmt, AST_FORMAT_G729A, 0), 0, "audio", "G729A", 8000);

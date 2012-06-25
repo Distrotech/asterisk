@@ -472,8 +472,11 @@ static struct ast_channel *ooh323_new(struct ooh323_pvt *i, int state,
 			} 
 	 	}
 
-		manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate", "Channel: %s\r\nChanneltype: %s\r\n"
+		if (ch) {
+			manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate", 
+				"Channel: %s\r\nChanneltype: %s\r\n"
 				"CallRef: %d\r\n", ch->name, "OOH323", i->call_reference);
+		}
 	} else
 		ast_log(LOG_WARNING, "Unable to allocate channel structure\n");
 
@@ -848,6 +851,7 @@ static int ooh323_digit_begin(struct ast_channel *chan, char digit)
 {
 	char dtmf[2];
 	struct ooh323_pvt *p = (struct ooh323_pvt *) chan->tech_pvt;
+	int res = 0;
 	
 	if (gH323Debug)
 		ast_verbose("---   ooh323_digit_begin\n");
@@ -866,17 +870,21 @@ static int ooh323_digit_begin(struct ast_channel *chan, char digit)
 		dtmf[0] = digit;
 		dtmf[1] = '\0';
 		ooSendDTMFDigit(p->callToken, dtmf);
+	} else if (p->dtmfmode & H323_DTMF_INBAND) {
+		res = -1; // tell Asterisk to generate inband indications
 	}
 	ast_mutex_unlock(&p->lock);
-	if (gH323Debug)
-		ast_verbose("+++   ooh323_digit_begin\n");
+	if (gH323Debug) {
+		ast_verbose("+++   ooh323_digit_begin %d\n", res);
+	}
 
-	return 0;
+	return res;
 }
 
 static int ooh323_digit_end(struct ast_channel *chan, char digit, unsigned int duration)
 {
 	struct ooh323_pvt *p = (struct ooh323_pvt *) chan->tech_pvt;
+	int res = 0;
 
 	if (gH323Debug)
 		ast_verbose("---   ooh323_digit_end\n");
@@ -886,14 +894,18 @@ static int ooh323_digit_end(struct ast_channel *chan, char digit, unsigned int d
 		return -1;
 	}
 	ast_mutex_lock(&p->lock);
-	if (p->rtp && ((p->dtmfmode & H323_DTMF_RFC2833) || (p->dtmfmode & H323_DTMF_CISCO)) ) 
+	if (p->rtp && ((p->dtmfmode & H323_DTMF_RFC2833) || (p->dtmfmode & H323_DTMF_CISCO)) ) {
 		ast_rtp_instance_dtmf_end(p->rtp, digit);
+	} else if(p->dtmfmode & H323_DTMF_INBAND) {
+		res = -1; // tell Asterisk to stop inband indications
+	}
 
 	ast_mutex_unlock(&p->lock);
-	if (gH323Debug)
-		ast_verbose("+++   ooh323_digit_end\n");
+	if (gH323Debug) {
+		ast_verbose("+++   ooh323_digit_end, res = %d\n", res);
+	}
 
-	return 0;
+	return res;
 }
 
 
@@ -4155,7 +4167,6 @@ static int ooh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance
 	/* XXX Deal with Video */
 	struct ooh323_pvt *p;
 	struct ast_sockaddr tmp;
-	int mode;
 
 	if (gH323Debug)
 		ast_verbose("---   ooh323_set_peer - %s\n", chan->name);
@@ -4164,7 +4175,6 @@ static int ooh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance
 		return 0;
 	}
 
-	mode = ooh323_convertAsteriskCapToH323Cap(&chan->writeformat); 
 	p = (struct ooh323_pvt *) chan->tech_pvt;
 	if (!p) {
 		ast_log(LOG_ERROR, "No Private Structure, this is bad\n");

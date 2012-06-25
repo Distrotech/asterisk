@@ -156,6 +156,8 @@ enum sig_pri_call_level {
 	SIG_PRI_CALL_LEVEL_PROCEEDING,
 	/*! Called party is being alerted of the call. (ALERTING) */
 	SIG_PRI_CALL_LEVEL_ALERTING,
+	/*! Call is dialing 'w' deferred digits. (CONNECT) */
+	SIG_PRI_CALL_LEVEL_DEFER_DIAL,
 	/*! Call is connected/answered. (CONNECT) */
 	SIG_PRI_CALL_LEVEL_CONNECT,
 };
@@ -190,6 +192,7 @@ struct sig_pri_callback {
 	void (* const set_alarm)(void *pvt, int in_alarm);
 	void (* const set_dialing)(void *pvt, int is_dialing);
 	void (* const set_digital)(void *pvt, int is_digital);
+	void (* const set_outgoing)(void *pvt, int is_outgoing);
 	void (* const set_callerid)(void *pvt, const struct ast_party_caller *caller);
 	void (* const set_dnid)(void *pvt, const char *dnid);
 	void (* const set_rdnis)(void *pvt, const char *rdnis);
@@ -199,6 +202,7 @@ struct sig_pri_callback {
 	const char *(* const get_orig_dialstring)(void *pvt);
 	void (* const make_cc_dialstring)(void *pvt, char *buf, size_t buf_size);
 	void (* const update_span_devstate)(struct sig_pri_span *pri);
+	void (* const dial_digits)(void *pvt, const char *dial_string);
 
 	void (* const open_media)(void *pvt);
 
@@ -290,6 +294,8 @@ struct sig_pri_chan {
 	/*! \brief Keypad digits that came in with the SETUP message. */
 	char keypad_digits[AST_MAX_EXTENSION];
 #endif	/* defined(HAVE_PRI_SETUP_KEYPAD) */
+	/*! 'w' deferred dialing digits. */
+	char deferred_digits[AST_MAX_EXTENSION];
 	/*! Music class suggested with AST_CONTROL_HOLD. */
 	char moh_suggested[MAX_MUSICCLASS];
 	enum sig_pri_moh_state moh_state;
@@ -605,6 +611,7 @@ void sig_pri_init_pri(struct sig_pri_span *pri);
 /* If return 0, it means this function was able to handle it (pre setup digits).  If non zero, the user of this
  * functions should handle it normally (generate inband DTMF) */
 int sig_pri_digit_begin(struct sig_pri_chan *pvt, struct ast_channel *ast, char digit);
+void sig_pri_dial_complete(struct sig_pri_chan *pvt, struct ast_channel *ast);
 
 void sig_pri_stop_pri(struct sig_pri_span *pri);
 int sig_pri_start_pri(struct sig_pri_span *pri);

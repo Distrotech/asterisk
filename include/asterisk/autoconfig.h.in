@@ -839,6 +839,9 @@
 /* Define to 1 if `ifr_ifru.ifru_hwaddr' is member of `struct ifreq'. */
 #undef HAVE_STRUCT_IFREQ_IFR_IFRU_IFRU_HWADDR
 
+/* Define to 1 if `uid' is member of `struct sockpeercred'. */
+#undef HAVE_STRUCT_SOCKPEERCRED_UID
+
 /* Define to 1 if `st_blksize' is member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_BLKSIZE
 
@@ -1019,6 +1022,9 @@
 
 /* Define to 1 if you have the Vorbis library. */
 #undef HAVE_VORBIS
+
+/* Define if your system has OV_CALLBACKS_NOCLOSE declared. */
+#undef HAVE_VORBIS_OPEN_CALLBACKS
 
 /* Define if your system has the VoiceTronix API libraries. */
 #undef HAVE_VPB

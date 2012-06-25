@@ -165,7 +165,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				</enumlist>
 			</parameter>
 		</syntax>
-		<description></description>
+		<description>
+			<para>Gets information associated with the specified IAX2 peer.</para>
+		</description>
 		<see-also>
 			<ref type="function">SIPPEER</ref>
 		</see-also>
@@ -177,7 +179,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<syntax>
 			<parameter name="varname" required="true" />
 		</syntax>
-		<description></description>
+		<description>
+			<para>Gets or sets a variable that is sent to a remote IAX2 peer during call setup.</para>
+		</description>
 	</function>
 	<manager name="IAXpeers" language="en_US">
 		<synopsis>
@@ -1161,9 +1165,6 @@ static void __attribute__((format(printf, 1, 2))) jb_debug_output(const char *fm
 	ast_verbose("%s", buf);
 }
 
-static int maxtrunkcall = TRUNK_CALL_START;
-static int maxnontrunkcall = 1;
-
 static enum ast_bridge_result iax2_bridge(struct ast_channel *c0, struct ast_channel *c1, int flags, struct ast_frame **fo, struct ast_channel **rc, int timeoutms);
 static int expire_registry(const void *data);
 static int iax2_answer(struct ast_channel *c);
@@ -2081,7 +2082,15 @@ static int match(struct sockaddr_in *sin, unsigned short callno, unsigned short 
 	return 0;
 }
 
-static void update_max_trunk(void)
+#ifdef IAX_OLD_FIND
+
+static int maxtrunkcall = TRUNK_CALL_START;
+static int maxnontrunkcall = 1;
+
+#define update_max_trunk() __update_max_trunk()
+#define update_max_nontrunk() __update_max_nontrunk()
+
+static void __update_max_trunk(void)
 {
 	int max = TRUNK_CALL_START;
 	int x;
@@ -2098,7 +2107,7 @@ static void update_max_trunk(void)
 		ast_debug(1, "New max trunk callno is %d\n", max);
 }
 
-static void update_max_nontrunk(void)
+static void __update_max_nontrunk(void)
 {
 	int max = 1;
 	int x;
@@ -2111,6 +2120,13 @@ static void update_max_nontrunk(void)
 	if (iaxdebug)
 		ast_debug(1, "New max nontrunk callno is %d\n", max);
 }
+
+#else
+
+#define update_max_trunk() do { } while (0)
+#define update_max_nontrunk() do { } while (0)
+
+#endif
 
 static int make_trunk(unsigned short callno, int locked)
 {
@@ -2634,14 +2650,21 @@ static char *handle_cli_iax2_show_callno_limits(struct ast_cli_entry *e, int cmd
 		if (a->argc < 4 || a->argc > 5)
 			return CLI_SHOWUSAGE;
 
-		ast_cli(a->fd, "%-15s %-12s %-12s\n", "Address", "Callno Usage", "Callno Limit");
+		if (a->argc == 4) {
+			ast_cli(a->fd, "%-15s %-12s %-12s\n", "Address", "Callno Usage", "Callno Limit");
+		}
+
 		i = ao2_iterator_init(peercnts, 0);
 		while ((peercnt = ao2_iterator_next(&i))) {
 			sin.sin_addr.s_addr = peercnt->addr;
-			if (a->argc == 5 && (!strcasecmp(a->argv[4], ast_inet_ntoa(sin.sin_addr)))) {
+			if (a->argc == 5) {
+				if (!strcasecmp(a->argv[4], ast_inet_ntoa(sin.sin_addr))) {
+					ast_cli(a->fd, "%-15s %-12s %-12s\n", "Address", "Callno Usage", "Callno Limit");
 					ast_cli(a->fd, "%-15s %-12d %-12d\n", ast_inet_ntoa(sin.sin_addr), peercnt->cur, peercnt->limit);
+					ao2_ref(peercnt, -1);
 					found = 1;
 					break;
+				}
 			} else {
 				ast_cli(a->fd, "%-15s %-12d %-12d\n", ast_inet_ntoa(sin.sin_addr), peercnt->cur, peercnt->limit);
 			}
@@ -2662,7 +2685,7 @@ static char *handle_cli_iax2_show_callno_limits(struct ast_cli_entry *e, int cmd
 				ao2_container_count(callno_pool),
 				ao2_container_count(callno_pool_trunk));
 		} else if (a->argc == 5 && !found) {
-			ast_cli(a->fd, "No callnumber table entries for %s found\n", a->argv[4] );
+			ast_cli(a->fd, "No call number table entries for %s found\n", a->argv[4] );
 		}
 
 
@@ -3510,7 +3533,7 @@ retry:
 		ast_channel_unlock(owner);
 	}
 
-	if (callno & 0x4000) {
+	if (callno & TRUNK_CALL_START) {
 		update_max_trunk();
 	}
 }
@@ -4792,12 +4815,16 @@ static int send_apathetic_reply(unsigned short callno, unsigned short dcallno,
 	}
 
 	data.f.scallno = htons(0x8000 | callno);
-	data.f.dcallno = htons(dcallno);
+	data.f.dcallno = htons(dcallno & ~IAX_FLAG_RETRANS);
 	data.f.ts = htonl(ts);
 	data.f.iseqno = seqno;
 	data.f.oseqno = 0;
 	data.f.type = AST_FRAME_IAX;
 	data.f.csub = compress_subclass(command);
+
+	if (iaxdebug) {
+		iax_outputframe(NULL, &data.f, 0, sin, size - sizeof(struct ast_iax2_full_hdr));
+	}
 
 	return sendto(sockfd, &data, size, 0, (struct sockaddr *)sin, sizeof(*sin));
 }
@@ -6684,8 +6711,7 @@ static char *handle_cli_iax2_show_users(struct ast_cli_entry *e, int cmd, struct
 
 	ast_cli(a->fd, FORMAT, "Username", "Secret", "Authen", "Def.Context", "A/C","Codec Pref");
 	i = ao2_iterator_init(users, 0);
-	for (user = ao2_iterator_next(&i); user; 
-		user_unref(user), user = ao2_iterator_next(&i)) {
+	for (; (user = ao2_iterator_next(&i)); user_unref(user)) {
 		if (havepattern && regexec(&regexbuf, user->name, 0, NULL, 0))
 			continue;
 
@@ -6773,8 +6799,7 @@ static int __iax2_show_peers(int fd, int *total, struct mansession *s, const int
 		ast_cli(fd, FORMAT2, "Name/Username", "Host", "   ", "Mask", "Port", "   ", "Status", "Description");
 
 	i = ao2_iterator_init(peers, 0);
-	for (peer = ao2_iterator_next(&i); peer;
-		peer_unref(peer), peer = ao2_iterator_next(&i)) {
+	for (; (peer = ao2_iterator_next(&i)); peer_unref(peer)) {
 		char nm[20];
 		char status[20];
 		int retstatus;
@@ -7100,7 +7125,7 @@ static int manager_iax2_show_peer_list(struct mansession *s, const struct messag
 
 
 	i = ao2_iterator_init(peers, 0);
-	for (peer = ao2_iterator_next(&i); peer; peer_unref(peer), peer = ao2_iterator_next(&i)) {
+	for (; (peer = ao2_iterator_next(&i)); peer_unref(peer)) {
 		encmethods_to_str(peer->encmethods, encmethods);
 		astman_append(s, "Event: PeerEntry\r\n%sChanneltype: IAX\r\n", idtext);
 		if (!ast_strlen_zero(peer->username)) {
@@ -7683,8 +7708,8 @@ static int check_access(int callno, struct sockaddr_in *sin, struct iax_ies *ies
 		return res;
 	}
 	/* Search the userlist for a compatible entry, and fill in the rest */
-	i = ao2_iterator_init(users, 0);
 	ast_sockaddr_from_sin(&addr, sin);
+	i = ao2_iterator_init(users, 0);
 	while ((user = ao2_iterator_next(&i))) {
 		if ((ast_strlen_zero(iaxs[callno]->username) ||				/* No username specified */
 			!strcmp(iaxs[callno]->username, user->name))	/* Or this username specified */
@@ -11850,7 +11875,8 @@ static void *iax2_process_thread(void *data)
 		handle_deferred_full_frames(thread);
 	}
 
-	/*!\note For some reason, idle threads are exiting without being removed
+	/*!
+	 * \note For some reason, idle threads are exiting without being removed
 	 * from an idle list, which is causing memory corruption.  Forcibly remove
 	 * it from the list, if it's there.
 	 */
@@ -11861,6 +11887,11 @@ static void *iax2_process_thread(void *data)
 	AST_LIST_LOCK(&dynamic_list);
 	AST_LIST_REMOVE(&dynamic_list, thread, list);
 	AST_LIST_UNLOCK(&dynamic_list);
+
+	if (!thread->stop) {
+		/* Nobody asked me to stop so nobody is waiting to join me. */
+		pthread_detach(pthread_self());
+	}
 
 	/* I am exiting here on my own volition, I need to clean up my own data structures
 	* Assume that I am no longer in any of the lists (idle, active, or dynamic)
@@ -12487,6 +12518,7 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 		peer->pokeexpire = -1;
 		peer->sockfd = defaultsockfd;
 		peer->addr.ss.ss_family = AF_INET;
+		peer->addr.len = sizeof(struct sockaddr_in);
 		if (ast_string_field_init(peer, 32))
 			peer = peer_unref(peer);
 	}
@@ -12674,7 +12706,7 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 			} else if (!strcasecmp(v->name, "qualifyfreqnotok")) {
 				if (sscanf(v->value, "%30d", &peer->pokefreqnotok) != 1) {
 					ast_log(LOG_WARNING, "Qualification testing frequency of peer '%s' when NOT OK should be a number of milliseconds at line %d of iax.conf\n", peer->name, v->lineno);
-				} else ast_log(LOG_WARNING, "Set peer->pokefreqnotok to %d\n", peer->pokefreqnotok);
+				}
 			} else if (!strcasecmp(v->name, "timezone")) {
 				ast_string_field_set(peer, zonetag, v->value);
 			} else if (!strcasecmp(v->name, "adsi")) {
@@ -13087,7 +13119,7 @@ static void set_config_destroy(void)
 {
 	strcpy(accountcode, "");
 	strcpy(language, "");
-	strcpy(mohinterpret, "default");
+	strcpy(mohinterpret, "");
 	strcpy(mohsuggest, "");
 	trunkmaxsize = MAX_TRUNKDATA;
 	amaflags = 0;
@@ -13328,8 +13360,13 @@ static int set_config(const char *config_file, int reload)
 			ast_set2_flag64((&globalflags), i || ast_true(v->value), IAX_RTAUTOCLEAR);
 		} else if (!strcasecmp(v->name, "trunkfreq")) {
 			trunkfreq = atoi(v->value);
-			if (trunkfreq < 10)
+			if (trunkfreq < 10) {
+				ast_log(LOG_NOTICE, "trunkfreq must be between 10ms and 1000ms, using 10ms instead.\n");
 				trunkfreq = 10;
+			} else if (trunkfreq > 1000) {
+				ast_log(LOG_NOTICE, "trunkfreq must be between 10ms and 1000ms, using 1000ms instead.\n");
+				trunkfreq = 1000;
+			}
 		} else if (!strcasecmp(v->name, "trunkmtu")) {
 			mtuv = atoi(v->value);
 			if (mtuv  == 0 )
@@ -14692,10 +14729,9 @@ static int users_data_provider_get(const struct ast_data_search *search,
 	char *pstr = "";
 
 	i = ao2_iterator_init(users, 0);
-	while ((user = ao2_iterator_next(&i))) {
+	for (; (user = ao2_iterator_next(&i)); user_unref(user)) {
 		data_user = ast_data_add_node(data_root, "user");
 		if (!data_user) {
-			user_unref(user);
 			continue;
 		}
 
@@ -14743,8 +14779,6 @@ static int users_data_provider_get(const struct ast_data_search *search,
 			pstr = ast_test_flag64(user, IAX_CODEC_USER_FIRST) ? "caller" : "host";
 		}
 		ast_data_add_str(data_user, "codec-preferences", pstr);
-
-		user_unref(user);
 
 		if (!ast_data_search_match(search, data_user)) {
 			ast_data_remove_node(data_root, data_user);
@@ -14836,7 +14870,7 @@ static int load_module(void)
 	jb_setoutput(jb_error_output, jb_warning_output, NULL);
 	
 	if ((timer = ast_timer_open())) {
-		ast_timer_set_rate(timer, trunkfreq);
+		ast_timer_set_rate(timer, 1000 / trunkfreq);
 	}
 
 	if (set_config(config, 0) == -1) {

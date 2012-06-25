@@ -1824,7 +1824,7 @@ static int imap_retrieve_greeting(const char *dir, const int msgnum, struct ast_
 	struct vm_state *vms_p;
 	char *file, *filename;
 	char *attachment;
-	int ret = 0, i;
+	int i;
 	BODY *body;
 
 	/* This function is only used for retrieval of IMAP greetings
@@ -1854,12 +1854,12 @@ static int imap_retrieve_greeting(const char *dir, const int msgnum, struct ast_
 			return -1;
 		}
 	}
-	
+
 	/* Greetings will never have a prepended message */
 	*vms_p->introfn = '\0';
 
 	ast_mutex_lock(&vms_p->lock);
-	ret = init_mailstream(vms_p, GREETINGS_FOLDER);
+	init_mailstream(vms_p, GREETINGS_FOLDER);
 	if (!vms_p->mailstream) {
 		ast_log(AST_LOG_ERROR, "IMAP mailstream is NULL\n");
 		ast_mutex_unlock(&vms_p->lock);
@@ -6841,9 +6841,6 @@ static int get_folder2(struct ast_channel *chan, char *fn, int start)
 static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, char *curdir, int curmsg, char *vm_fmts,
 			char *context, signed char record_gain, long *duration, struct vm_state *vms, char *flag)
 {
-#ifdef IMAP_STORAGE
-	int res;
-#endif
 	int cmd = 0;
 	int retries = 0, prepend_duration = 0, already_recorded = 0;
 	char msgfile[PATH_MAX], backup[PATH_MAX], backup_textfile[PATH_MAX];
@@ -6880,9 +6877,9 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 			/* Record new intro file */
 			make_file(vms->introfn, sizeof(vms->introfn), curdir, curmsg);
 			strncat(vms->introfn, "intro", sizeof(vms->introfn));
-			res = ast_play_and_wait(chan, INTRO);
-			res = ast_play_and_wait(chan, "beep");
-			res = play_record_review(chan, NULL, vms->introfn, vmu->maxsecs, vm_fmts, 1, vmu, (int *) duration, NULL, NULL, record_gain, vms, flag);
+			ast_play_and_wait(chan, INTRO);
+			ast_play_and_wait(chan, "beep");
+			play_record_review(chan, NULL, vms->introfn, vmu->maxsecs, vm_fmts, 1, vmu, (int *) duration, NULL, NULL, record_gain, vms, flag);
 			cmd = 't';
 #else
 
@@ -6898,7 +6895,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 				cmd = 0;
 				break;
 			}
-			
+
 			/* Back up the original file, so we can retry the prepend and restore it after forward. */
 #ifndef IMAP_STORAGE
 			if (already_recorded) {
@@ -7931,9 +7928,9 @@ static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu, int box)
 static int close_mailbox(struct vm_state *vms, struct ast_vm_user *vmu)
 {
 	int x = 0;
+	int last_msg_idx = 0;
 
 #ifndef IMAP_STORAGE
-	int last_msg_idx;
 	int res = 0, nummsg;
 	char fn2[PATH_MAX];
 #endif
@@ -8010,7 +8007,8 @@ static int close_mailbox(struct vm_state *vms, struct ast_vm_user *vmu)
 	if (vms->deleted) {
 		/* Since we now expunge after each delete, deleting in reverse order
 		 * ensures that no reordering occurs between each step. */
-		for (x = vms->dh_arraysize - 1; x >= 0; x--) {
+		last_msg_idx = vms->dh_arraysize;
+		for (x = last_msg_idx - 1; x >= 0; x--) {
 			if (vms->deleted[x]) {
 				ast_debug(3, "IMAP delete of %d\n", x);
 				DELETE(vms->curdir, x, vms->fn, vmu);
@@ -8020,11 +8018,11 @@ static int close_mailbox(struct vm_state *vms, struct ast_vm_user *vmu)
 #endif
 
 done:
-	if (vms->deleted && vmu->maxmsg) {
-		memset(vms->deleted, 0, vms->dh_arraysize * sizeof(int));
+	if (vms->deleted && last_msg_idx) {
+		ast_free(vms->deleted);
 	}
-	if (vms->heard && vmu->maxmsg) {
-		memset(vms->heard, 0, vms->dh_arraysize * sizeof(int));
+	if (vms->heard && last_msg_idx) {
+		ast_free(vms->heard);
 	}
 
 	return 0;
@@ -10013,17 +10011,6 @@ static int vm_execmain(struct ast_channel *chan, const char *data)
 	vmstate_insert(&vms);
 	init_vm_state(&vms);
 #endif
-	/* Avoid allocating a buffer of 0 bytes, because some platforms really don't like that. */
-	if (!(vms.deleted = ast_calloc(vmu->maxmsg ? vmu->maxmsg : 1, sizeof(int)))) {
-		ast_log(AST_LOG_ERROR, "Could not allocate memory for deleted message storage!\n");
-		cmd = ast_play_and_wait(chan, "an-error-has-occured");
-		return -1;
-	}
-	if (!(vms.heard = ast_calloc(vmu->maxmsg ? vmu->maxmsg : 1, sizeof(int)))) {
-		ast_log(AST_LOG_ERROR, "Could not allocate memory for heard message storage!\n");
-		cmd = ast_play_and_wait(chan, "an-error-has-occured");
-		return -1;
-	}
 
 	/* Set language from config to override channel language */
 	if (!ast_strlen_zero(vmu->language))
@@ -10606,10 +10593,6 @@ out:
 #endif
 	if (vmu)
 		free_user(vmu);
-	if (vms.deleted)
-		ast_free(vms.deleted);
-	if (vms.heard)
-		ast_free(vms.heard);
 
 #ifdef IMAP_STORAGE
 	pthread_setspecific(ts_vmstate.key, NULL);
