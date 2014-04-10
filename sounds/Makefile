@@ -153,7 +153,7 @@ $(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),extra-sounds,fr,$(EXTRA_SOUND
 $(eval $(call sound_format_lang_rule,$(MOH_DIR),moh,,$(MOH_VERSION)))
 
 dist-clean:
-	rm -f *.tar.gz
+#	rm -f *.tar.gz
 
 install: $(CORE_SOUND_TAGS) $(EXTRA_SOUND_TAGS) $(MOH_TAGS)
 
