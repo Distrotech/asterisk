@@ -1,0 +1,260 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+    <head>
+        <title>Asterisk Project : New in 10</title>
+	    <link rel="stylesheet" href="styles/site.css" type="text/css" />
+        <META http-equiv="Content-Type" content="text/html; charset=UTF-8">	    
+    </head>
+
+    <body>
+	    <table class="pagecontent" border="0" cellpadding="0" cellspacing="0" width="100%" bgcolor="#ffffff">
+		    <tr>
+			    <td valign="top" class="pagebody">
+				    <div class="pageheader">
+					    <span class="pagetitle">
+                            Asterisk Project : New in 10
+                                                    </span>
+				    </div>
+				    <div class="pagesubheading">
+					    This page last changed on Sep 01, 2011 by <font color="#0050B2">mnicholson</font>.
+				    </div>
+
+				    <div>
+<ul>
+    <li><a href='#Newin10-Overview'>Overview</a></li>
+<ul>
+    <li><a href='#Newin10-InBrief'>In Brief</a></li>
+    <li><a href='#Newin10-DetailedListing'>Detailed Listing</a></li>
+<ul>
+    <li><a href='#Newin10-TextMessaging'>Text Messaging</a></li>
+    <li><a href='#Newin10-Parking'>Parking</a></li>
+    <li><a href='#Newin10-AsteriskManagerInterface'>Asterisk Manager Interface</a></li>
+    <li><a href='#Newin10-AsteriskHTTPServer'>Asterisk HTTP Server</a></li>
+    <li><a href='#Newin10-chandahdi'>chan_dahdi</a></li>
+    <li><a href='#Newin10-CLIChanges'>CLI Changes</a></li>
+    <li><a href='#Newin10-CDR'>CDR</a></li>
+    <li><a href='#Newin10-CODECS'>CODECS</a></li>
+    <li><a href='#Newin10-ConfBridge'>ConfBridge</a></li>
+    <li><a href='#Newin10-DialplanVariables'>Dialplan Variables</a></li>
+    <li><a href='#Newin10-DialplanFunctions'>Dialplan Functions</a></li>
+    <li><a href='#Newin10-libprichanneldriver%28chandahdi%29DAHDIchanges'>libpri channel driver (chan_dahdi) DAHDI changes</a></li>
+    <li><a href='#Newin10-Calendaring'>Calendaring</a></li>
+    <li><a href='#Newin10-MixMonitor'>MixMonitor</a></li>
+    <li><a href='#Newin10-FollowMe'>FollowMe</a></li>
+    <li><a href='#Newin10-CEL'>CEL</a></li>
+    <li><a href='#Newin10-pbxlua'>pbx_lua</a></li>
+    <li><a href='#Newin10-resfax'>res_fax</a></li>
+    <li><a href='#Newin10-SIPChanges'>SIP Changes</a></li>
+    <li><a href='#Newin10-Queuechanges'>Queue changes</a></li>
+    <li><a href='#Newin10-Applications'>Applications</a></li>
+    <li><a href='#Newin10-AsteriskDatabase'>Asterisk Database</a></li>
+    <li><a href='#Newin10-AsteriskModules'>Asterisk Modules</a></li>
+</ul>
+</ul>
+</ul></div>
+
+<h1><a name="Newin10-Overview"></a>Overview</h1>
+
+<p>A listing of new capabilities in Asterisk 10</p>
+<h2><a name="Newin10-InBrief"></a>In Brief</h2>
+
+<p>Asterisk 10 introduces a number of new features since the previous 1.8 release.  Highlights include:</p>
+
+<ul>
+	<li>Advanced, high-performance wide and ultra-wideband conferencing application for 8-192kHz clients</li>
+	<li>Re-architected media negotiation framework featuring support for an array of common sampling rates</li>
+	<li>Support for SKYPE's SILK codec, offering narrow, wide and ultra-wideband audio</li>
+	<li>Pass-ThroughSupport for the CELT low-latency audio codec at 32 and 48kHz</li>
+	<li>Support for the SPEEX codec at 32kHz</li>
+	<li>New receive-side jitter buffer capabilities</li>
+	<li>CCSS Device State Information</li>
+</ul>
+
+
+
+<h2><a name="Newin10-DetailedListing"></a>Detailed Listing</h2>
+
+
+<h3><a name="Newin10-TextMessaging"></a>Text Messaging</h3>
+<ul>
+	<li>Asterisk now has protocol independent support for processing text messages outside of a call.  Messages are routed through the Asterisk dialplan.  SIP MESSAGE and XMPP are currently supported.  There are options in jabber.conf and sip.conf to allow enabling these features.<br/>
+-&gt; jabber.conf: see the "sendtodialplan" and "context" options.<br/>
+-&gt; sip.conf: see the "accept_outofcall_message", "auth_message_requests" and "outofcall_message_context" options.<br/>
+The MESSAGE() dialplan function and MessageSend() application have been added to go along with this functionality.  More detailed usage information can be found on the Asterisk wiki (<a href="http://wiki.asterisk.org/">http://wiki.asterisk.org/</a>).</li>
+</ul>
+
+
+<h3><a name="Newin10-Parking"></a>Parking</h3>
+<ul>
+	<li>parkedmusicclass can now be set for non-default parking lots.</li>
+	<li>ParkedCall application can now specify a specific parkinglot.</li>
+</ul>
+
+
+<h3><a name="Newin10-AsteriskManagerInterface"></a>Asterisk Manager Interface</h3>
+<ul>
+	<li>PeerStatus now includes Address and Port.</li>
+	<li>Added Hold events for when the remote party puts the call on and off hold for chan_dahdi ISDN channels.</li>
+	<li>Added new action MeetmeListRooms to list active conferences (shows same data as "meetme list" at the CLI).</li>
+	<li>DAHDIShowChannels, SIPshowpeer, SIPpeers, and IAXpeers now contains a Description field that is set by 'description' in the channel configuration file.</li>
+	<li>Added Uniqueid header to UserEvent.</li>
+	<li>Added new action FilterAdd to control event filters for the current session. This requires the system permission and uses the same filter syntax as filters that can be defined in manager.conf</li>
+</ul>
+
+
+<h3><a name="Newin10-AsteriskHTTPServer"></a>Asterisk HTTP Server</h3>
+<ul>
+	<li>The HTTP Server can bind to IPv6 addresses.</li>
+</ul>
+
+
+<h3><a name="Newin10-chandahdi"></a>chan_dahdi</h3>
+<ul>
+	<li>Busy tone patterns featuring 2 silence and 2 tone lengths can now be used with busydetect.  usage example: busypattern=200,200,200,600</li>
+</ul>
+
+
+<h3><a name="Newin10-CLIChanges"></a>CLI Changes</h3>
+<ul>
+	<li>New 'gtalk show settings' command showing the current settings loaded from gtalk.conf.</li>
+	<li>The 'logger reload' command now supports an optional argument, specifying an alternate configuration file to use.</li>
+	<li>'dialplan add extension' command will now automatically create a context if the specified context does not exist with a message indicated it did so.</li>
+	<li>'sip show peers', 'iax show peers', and 'dahdi show peers' now contains a Description field which can be populated with 'description' in the channel configuration files (sip.conf, iax2.conf, and chan_dahdi.conf).</li>
+</ul>
+
+
+<h3><a name="Newin10-CDR"></a>CDR</h3>
+<ul>
+	<li>The filter option in cdr_adaptive_odbc now supports negating the argument, thus allowing records which do NOT match the specified filter.</li>
+</ul>
+
+
+<h3><a name="Newin10-CODECS"></a>CODECS</h3>
+<ul>
+	<li>Ability to define custom SILK formats in codecs.conf.</li>
+	<li>Addition of speex32 audio format with translation.</li>
+	<li>CELT codec pass-through support and ability to define custom CELT formats in codecs.conf.</li>
+	<li>Ability to read raw signed linear files with sample rates ranging from 8khz - 192khz.  The new file extensions introduced are .sln12, .sln24, .sln32, .sln44, .sln48, .sln96, .sln192.</li>
+</ul>
+
+
+<h3><a name="Newin10-ConfBridge"></a>ConfBridge</h3>
+<ul>
+	<li>New highly optimized and customizable ConfBridge application capable of mixing audio at sample rates ranging from 8khz-96khz.</li>
+	<li>CONFBRIDGE dialplan function capable of creating dynamic ConfBridge user and bridge profiles on a channel.</li>
+	<li>CONFBRIDGE_INFO dialplan function capable of retrieving information  about a conference such as locked status and number of parties, admins, and marked users.</li>
+	<li>Addition of video_mode option in confbridge.conf for adding video support into a bridge profile.</li>
+	<li>Addition of the follow_talker video_mode in confbridge.conf.  This video mode dynamically switches the video feed to always display the loudest talker supplying video in the conference.</li>
+</ul>
+
+
+<h3><a name="Newin10-DialplanVariables"></a>Dialplan Variables</h3>
+<ul>
+	<li>Added ASTETCDIR, ASTMODDIR, ASTVARLIBDIR, ASTDBDIR, ASTKEYDIR, ASTDATADIR, ASTAGIDIR, ASTSPOOLDIR, ASTRUNDIR, ASTLOGDIR which hold the equivalent variables from asterisk.conf.</li>
+</ul>
+
+
+<h3><a name="Newin10-DialplanFunctions"></a>Dialplan Functions</h3>
+<ul>
+	<li>Addition of the JITTERBUFFER dialplan function. This function allows for jitterbuffering to occur on the read side of a channel.  By using this function conference applications such as ConfBridge and MeetMe can have the rx streams jitterbuffered before conference mixing occurs.</li>
+	<li>Added DB_KEYS, which lists the next set of keys in the Asterisk database hierarchy.</li>
+	<li>Added STRREPLACE function.  This function let's the user search a variable for a given string to replace with another string as many times as the user specifies or just throughout the whole string.</li>
+	<li>Added option to CHANNEL(pickupgroup) allow reading and setting the pickupgroup of channel.</li>
+</ul>
+
+
+<h3><a name="Newin10-libprichanneldriver%28chandahdi%29DAHDIchanges"></a>libpri channel driver (chan_dahdi) DAHDI changes</h3>
+<ul>
+	<li>Added moh_signaling option to specify what to do when the channel's bridged peer puts the ISDN channel on hold.</li>
+	<li>Added display_send and display_receive options to control how the display ie is handled.  To send display text from the dialplan use the SendText() application when the option is enabled.</li>
+	<li>Added mcid_send option to allow sending a MCID request on a span.</li>
+</ul>
+
+
+<h3><a name="Newin10-Calendaring"></a>Calendaring</h3>
+<ul>
+	<li>Added setvar option to calendar.conf to allow setting channel variables on notification channels.</li>
+	<li>Added "calendar show types" CLI command to list registered calendar connectors.</li>
+</ul>
+
+
+<h3><a name="Newin10-MixMonitor"></a>MixMonitor</h3>
+<ul>
+	<li>Added two new options, r and t with file name arguments to record single direction (unmixed) audio recording separate from the bidirectional (mixed) recording.  The mixed file name argument is optional now as long as at least one recording option is used.</li>
+</ul>
+
+
+<h3><a name="Newin10-FollowMe"></a>FollowMe</h3>
+<ul>
+	<li>Added a new option, l, which will disable local call optimization for channels involved with the FollowMe thread.  Use this option to improve compatability for a FollowMe call with certain dialplan apps, options, and functions.</li>
+</ul>
+
+
+<h3><a name="Newin10-CEL"></a>CEL</h3>
+<ul>
+	<li>cel_pgsql now supports the 'extra' column for data added using the CELGenUserEvent() application.</li>
+</ul>
+
+
+<h3><a name="Newin10-pbxlua"></a>pbx_lua</h3>
+<ul>
+	<li>Support for defining hints has been added to pbx_lua.  See the 'hints' table in the sample extensions.lua file for syntax details.</li>
+	<li>Applications that perform jumps in the dialplan such as Goto will now execute properly.  When pbx_lua detects that the context, extension, or priority we are executing on has changed it will immediately return control to the asterisk PBX engine.  Currently the engine cannot detect a Goto to the priority after the currently executing priority.</li>
+	<li>An autoservice is now started by default for pbx_lua channels.  It can be stopped and restarted using the autoservice_stop() and autoservice_start() functions.</li>
+</ul>
+
+
+<h3><a name="Newin10-resfax"></a>res_fax</h3>
+<ul>
+	<li>The ReceiveFAXStatus and SendFAXStatus manager events have been consolidated into a FAXStatus event with an 'Operation' header that will be either 'send', 'receive', or 'gateway'.</li>
+	<li>T.38 gateway functionality has been added to res_fax (and res_fax_spandsp). Set FAXOPT(gateway)=yes to enable this functionality on a channel. This feature will handle converting a fax call between an audio T.30 fax terminal and an IFP T.38 fax terminal.</li>
+</ul>
+
+
+<h3><a name="Newin10-SIPChanges"></a>SIP Changes</h3>
+<ul>
+	<li>Add T38 support for REJECTED state where T.38 Negotiation is explicitly rejected.</li>
+</ul>
+
+
+<h3><a name="Newin10-Queuechanges"></a>Queue changes</h3>
+<ul>
+	<li>Added general option negative_penalty_invalid default off. when set members are seen as invalid/logged out when there penalty is negative.  For realtime members when set remove from queue will set penalty to -1.</li>
+	<li>Added queue option autopausedelay when autopause is enabled it will be delayed for this number of seconds since last successful call if there was no prior call the agent will be autopaused immediately.</li>
+	<li>Added member option ignorebusy this when set and ringinuse is not will allow per member control of multiple calls as ringinuse does for the Queue.</li>
+</ul>
+
+
+<h3><a name="Newin10-Applications"></a>Applications</h3>
+<ul>
+	<li>Added 'v' option to MeetMe to play voicemail greetings when a user joins/leaves a MeetMe conference</li>
+	<li>Added ability to include '@parkinglot' to ParkedCall extension in order to specify a specific parkinglot on which to search the extension.</li>
+</ul>
+
+
+<h3><a name="Newin10-AsteriskDatabase"></a>Asterisk Database</h3>
+<ul>
+	<li>The internal Asterisk database has been switched from Berkeley DB 1.86 to SQLite 3. An existing Berkeley astdb file can be converted with the astdb2sqlite3 utility in the UTILS section of menuselect. If an existing astdb is found and no astdb.sqlite3 exists, astdb2sqlite3 will be compiled automatically. Asterisk will convert an existing astdb to the SQLite3 version automatically at runtime.</li>
+</ul>
+
+
+<h3><a name="Newin10-AsteriskModules"></a>Asterisk Modules</h3>
+<ul>
+	<li>Modules marked as deprecated are no longer marked as building by default. Enabling these modules is still available via menuselect.</li>
+</ul>
+
+
+				    
+                    			    </td>
+		    </tr>
+	    </table>
+	    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+			<tr>
+				<td height="12" background="https://wiki.asterisk.org/wiki/images/border/border_bottom.gif"><img src="images/border/spacer.gif" width="1" height="1" border="0"/></td>
+			</tr>
+		    <tr>
+			    <td align="center"><font color="grey">Document generated by Confluence on Oct 14, 2011 13:24</font></td>
+		    </tr>
+	    </table>
+    </body>
+</html>
