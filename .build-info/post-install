@@ -1,0 +1,4 @@
+#!/bin/bash
+
+mkdir ${3}/etc/asterisk/orig/
+mv ${3}/etc/asterisk/* ${3}/etc/asterisk/orig/ 2>/dev/null
