@@ -636,6 +636,7 @@ samples: adsi
 	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/voicemail/default/1234/INBOX"
 	build_tools/make_sample_voicemail "$(DESTDIR)/$(ASTDATADIR)" "$(DESTDIR)/$(ASTSPOOLDIR)"
 
+	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/phoneprov"
 	@for x in phoneprov/*; do \
 		dst="$(DESTDIR)$(ASTDATADIR)/$$x" ;	\
 		if [ -f "$${dst}" ]; then \
