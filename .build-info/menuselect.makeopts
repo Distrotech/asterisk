@@ -1,4 +1,4 @@
-MENUSELECT_ADDONS=chan_mobile 
+MENUSELECT_ADDONS=chan_mobile res_config_mysql app_mysql cdr_mysql 
 MENUSELECT_APPS=app_skel app_fax app_ivrdemo app_jack app_osplookup 
 MENUSELECT_BRIDGES=
 MENUSELECT_CDR=cdr_radius cdr_sqlite 
@@ -8,7 +8,7 @@ MENUSELECT_CODECS=
 MENUSELECT_FORMATS=
 MENUSELECT_FUNCS=
 MENUSELECT_PBX=pbx_lua 
-MENUSELECT_RES=res_http_post res_ais res_config_sqlite res_timing_kqueue 
+MENUSELECT_RES=res_http_post res_ais res_config_sqlite res_snmp res_timing_kqueue 
 MENUSELECT_TESTS=test_acl test_amihooks test_aoc test_app test_ast_format_str_reduce test_astobj2 test_astobj2_thrash test_config test_db test_devicestate test_dlinklists test_event test_expr test_format_api test_func_file test_gosub test_hashtab_thrash test_heap test_linkedlists test_locale test_logger test_netsock2 test_pbx test_poll test_sched test_security_events test_skel test_stringfields test_strings test_substitution test_time test_utils 
 MENUSELECT_CFLAGS=DONT_OPTIMIZE DEBUG_THREADS LOADABLE_MODULES 
 MENUSELECT_OPTS_app_voicemail=FILE_STORAGE 
@@ -29,6 +29,7 @@ MENUSELECT_DEPSFAILED=MENUSELECT_PBX=pbx_lua
 MENUSELECT_DEPSFAILED=MENUSELECT_RES=res_http_post
 MENUSELECT_DEPSFAILED=MENUSELECT_RES=res_ais
 MENUSELECT_DEPSFAILED=MENUSELECT_RES=res_config_sqlite
+MENUSELECT_DEPSFAILED=MENUSELECT_RES=res_snmp
 MENUSELECT_DEPSFAILED=MENUSELECT_RES=res_timing_kqueue
 MENUSELECT_DEPSFAILED=MENUSELECT_TESTS=test_acl
 MENUSELECT_DEPSFAILED=MENUSELECT_TESTS=test_amihooks
