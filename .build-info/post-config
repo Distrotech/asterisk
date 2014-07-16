@@ -1,5 +1,6 @@
 #!/bin/bash
 
+
 case ${1} in
   mips*)cp .build-info/menuselect.makeopts.mips ./menuselect.makeopts;;
   *)cp .build-info/menuselect.makeopts ./;;
